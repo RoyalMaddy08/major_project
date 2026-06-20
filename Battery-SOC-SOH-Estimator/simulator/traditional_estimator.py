@@ -6,17 +6,17 @@ except ImportError:
     from simulator.battery_chemistry import get_chemistry
 
 class ExtendedKalmanFilter:
-    def __init__(self, chemistry_name="li_ion"):
+    def __init__(self, chemistry_name="li_ion", mismatch=1.0):
         self.chemistry_name = chemistry_name
         self.chemistry = get_chemistry(chemistry_name)
         
-        # Load nominal parameters from chemistry
+        # Load nominal parameters from chemistry scaled by mismatch factor
         self.Cn = self.chemistry.nominal_capacity  # Ah
-        self.R0 = self.chemistry.R0_nom            # Ohms
-        self.R1 = self.chemistry.R1_nom            # Ohms
-        self.C1 = self.chemistry.C1_nom            # Farads
-        self.R2 = self.chemistry.R2_nom            # Ohms
-        self.C2 = self.chemistry.C2_nom            # Farads
+        self.R0 = self.chemistry.R0_nom * mismatch  # Ohms
+        self.R1 = self.chemistry.R1_nom * mismatch  # Ohms
+        self.C1 = self.chemistry.C1_nom * mismatch  # Farads
+        self.R2 = self.chemistry.R2_nom * mismatch  # Ohms
+        self.C2 = self.chemistry.C2_nom * mismatch  # Farads
 
         # Process noise covariance Q (states: SOC, V1, V2)
         self.Q = np.diag([1e-7, 1e-6, 1e-6])
