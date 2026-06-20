@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Battery Management System Analytics — Real-time SOC and SOH estimation comparison between Extended Kalman Filter and Echo State Network algorithms.">
+
+    <title>BMS Analytics — EKF vs. ESN Battery Estimator</title>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="shortcut icon" href="/static/images/favicon.ico" type="image/x-icon">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+</head>
+<body>
+    <div class="glass-bg"></div>
+
+    <div class="app-container">
+
+        <!-- ── Header ──────────────────────────────────────────── -->
+        <header class="main-header">
+            <div class="brand">
+                <div class="brand-icon-wrap">
+                    <i class="fa-solid fa-battery-three-quarters"></i>
+                </div>
+                <div class="brand-text">
+                    <h1>BMS Analytics</h1>
+                    <p>Extended Kalman Filter vs. Echo State Network — Live Comparison</p>
+                </div>
+            </div>
+
+            <div class="system-status">
+                <div class="status-indicator" id="sim-status-badge">
+                    <span class="dot pulse-red"></span>
+                    <span class="label">Simulator: Idle</span>
+                </div>
+                <div class="status-indicator" id="db-status-badge">
+                    <span class="dot pulse-amber"></span>
+                    <span class="label">MongoDB: Connecting…</span>
+                </div>
+                <div class="status-indicator" id="model-status-badge">
+                    <span class="dot pulse-red"></span>
+                    <span class="label">ESN Model: Checking…</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ── Dashboard Grid ──────────────────────────────────── -->
+        <main class="dashboard-grid">
+
+            <!-- ── Sidebar ──────────────────────────────────────── -->
+            <aside class="sidebar-container">
+                <section class="dashboard-card control-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-sliders"></i> Simulation Controller</h2>
+                    </div>
+
+                    <div class="card-body">
+                        <!-- ML Warning Banner -->
+                        <div id="ml-warning-banner" class="warning-banner hidden">
+                            <div class="banner-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                            <div class="banner-text">
+                                <h3>Model Training Required</h3>
+                                <p>Trained ESN model weights were not found. Run training first:</p>
+                                <code>python training/train_rc.py</code>
+                            </div>
+                        </div>
+
+                        <!-- Playback Controls -->
+                        <div class="control-group">
+                            <label>Playback</label>
+                            <div class="btn-group">
+                                <button id="btn-start" class="btn btn-primary" title="Start Battery Simulator">
+                                    <i class="fa-solid fa-play"></i> Start
+                                </button>
+                                <button id="btn-pause" class="btn btn-secondary" title="Pause Battery Simulator" disabled>
+                                    <i class="fa-solid fa-pause"></i> Pause
+                                </button>
+                                <button id="btn-stop" class="btn btn-dark" title="Stop Battery Simulator" disabled>
+                                    <i class="fa-solid fa-stop"></i> Stop
+                                </button>
+                                <button id="btn-reset" class="btn btn-danger" title="Reset Simulator &amp; Clear Data">
+                                    <i class="fa-solid fa-rotate-left"></i> Reset
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="control-divider"></div>
+
+                        <!-- Battery Chemistry -->
+                        <div class="control-group">
+                            <label for="chem-select">Battery Chemistry</label>
+                            <div class="select-wrapper">
+                                <select id="chem-select">
+                                    <option value="nmc">Li-ion NMC — 3S Pack (11.1 V)</option>
+                                    <option value="lfp">LiFePO₄ LFP — 3S Pack (9.6 V)</option>
+                                    <option value="lead_acid">Lead-Acid — 6S Pack (12 V)</option>
+                                    <option value="li_ion">Generic Li-ion — 3S Pack</option>
+                                </select>
+                                <i class="fa-solid fa-chevron-down select-arrow"></i>
+                            </div>
+                        </div>
+
+                        <!-- Drive Cycle -->
+                        <div class="control-group">
+                            <label for="cycle-select">Drive Cycle / Mode</label>
+                            <div class="select-wrapper">
+                                <select id="cycle-select">
+                                    <option value="udds">Urban Driving Schedule (UDDS)</option>
+                                    <option value="hwfet">Highway Fuel Economy (HWFET)</option>
+                                    <option value="us06">Aggressive Spikes (US06)</option>
+                                    <option value="constant">Constant Current Discharge (−1C)</option>
+                                    <option value="charge">CC-CV Charge</option>
+                                </select>
+                                <i class="fa-solid fa-chevron-down select-arrow"></i>
+                            </div>
+                        </div>
+
+                        <div class="control-divider"></div>
+
+                        <!-- Accelerated Aging Toggle -->
+                        <div class="control-group switch-group">
+                            <label>Degradation Mode</label>
+                            <div class="switch-container">
+                                <span class="switch-label">Accelerated SOH Aging</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="aging-toggle">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <p class="help-text">Speeds up capacity fade and resistance growth by ×1500 for rapid testing.</p>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+
+            <!-- ── Main Telemetry Area ────────────────────────── -->
+            <div class="main-content">
+
+                <!-- Metric Cards Row -->
+                <section class="metrics-grid">
+                    <!-- Voltage -->
+                    <div class="metric-card voltage-metric">
+                        <div class="metric-icon"><i class="fa-solid fa-bolt"></i></div>
+                        <div class="metric-info">
+                            <h3>Terminal Voltage</h3>
+                            <div class="metric-val"><span id="val-voltage">0.00</span>&nbsp;<span class="unit">V</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Current -->
+                    <div class="metric-card current-metric">
+                        <div class="metric-icon"><i class="fa-solid fa-wave-square"></i></div>
+                        <div class="metric-info">
+                            <h3>Load Current</h3>
+                            <div class="metric-val"><span id="val-current">0.00</span>&nbsp;<span class="unit">A</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Temperature -->
+                    <div class="metric-card temp-metric">
+                        <div class="metric-icon"><i class="fa-solid fa-temperature-half"></i></div>
+                        <div class="metric-info">
+                            <h3>Cell Temperature</h3>
+                            <div class="metric-val"><span id="val-temp">0.0</span>&nbsp;<span class="unit">°C</span></div>
+                        </div>
+                    </div>
+
+                    <!-- SOC Estimators -->
+                    <div class="metric-card estimator-card">
+                        <div class="metric-info">
+                            <h3>State of Charge (SOC)</h3>
+                            <div class="sub-values">
+                                <div><span>EKF</span><strong id="val-ekf-soc">0.0%</strong></div>
+                                <div><span>ESN</span><strong id="val-esn-soc">0.0%</strong></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SOH Estimators -->
+                    <div class="metric-card estimator-card">
+                        <div class="metric-info">
+                            <h3>State of Health (SOH)</h3>
+                            <div class="sub-values">
+                                <div><span>EKF</span><strong id="val-ekf-soh">100.0%</strong></div>
+                                <div><span>ESN</span><strong id="val-esn-soh">100.0%</strong></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Simulation Time -->
+                    <div class="metric-card time-metric">
+                        <div class="metric-icon"><i class="fa-solid fa-clock"></i></div>
+                        <div class="metric-info">
+                            <h3>Simulation Time</h3>
+                            <div class="metric-val"><span id="val-time">0</span>&nbsp;<span class="unit">s</span></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Charts 2-column grid -->
+                <div class="charts-grid">
+
+                    <!-- Chart 1: SOC Comparison -->
+                    <section class="dashboard-card chart-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-chart-line"></i> SOC — EKF vs. ESN</h2>
+                        </div>
+                        <div class="card-body chart-container">
+                            <canvas id="chart-soc"></canvas>
+                        </div>
+                    </section>
+
+                    <!-- Chart 2: SOH Comparison -->
+                    <section class="dashboard-card chart-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-heart-pulse"></i> SOH — EKF vs. ESN</h2>
+                        </div>
+                        <div class="card-body chart-container">
+                            <canvas id="chart-soh"></canvas>
+                        </div>
+                    </section>
+
+                    <!-- Chart 3: SOC Deviation -->
+                    <section class="dashboard-card chart-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-square-minus"></i> SOC Estimation Deviation</h2>
+                        </div>
+                        <div class="card-body chart-container">
+                            <canvas id="chart-soc-diff"></canvas>
+                        </div>
+                    </section>
+
+                    <!-- Chart 4: SOH Deviation -->
+                    <section class="dashboard-card chart-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-circle-minus"></i> SOH Estimation Deviation</h2>
+                        </div>
+                        <div class="card-body chart-container">
+                            <canvas id="chart-soh-diff"></canvas>
+                        </div>
+                    </section>
+
+                    <!-- Chart 5: Execution Latency -->
+                    <section class="dashboard-card chart-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-gauge-high"></i> Execution Latency (ms)</h2>
+                        </div>
+                        <div class="card-body chart-container">
+                            <canvas id="chart-bench-time"></canvas>
+                        </div>
+                    </section>
+
+                    <!-- Chart 6: RAM Footprint -->
+                    <section class="dashboard-card chart-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-memory"></i> RAM Footprint (MB)</h2>
+                        </div>
+                        <div class="card-body chart-container">
+                            <canvas id="chart-bench-mem"></canvas>
+                        </div>
+                    </section>
+
+                </div><!-- /charts-grid -->
+            </div><!-- /main-content -->
+        </main>
+
+        <footer class="main-footer">
+            <span><i class="fa-regular fa-copyright"></i> 2026 Advanced Battery Management System &mdash; EKF vs. ESN Evaluation Platform</span>
+        </footer>
+
+    </div><!-- /app-container -->
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

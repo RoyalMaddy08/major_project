@@ -1,0 +1,33 @@
+# Environment variables (NEVER commit real credentials)
+.env
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / OS artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test outputs
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Datasets (large files — add to Git LFS or keep local)
+datasets/*.csv
