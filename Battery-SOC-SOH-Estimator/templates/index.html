@@ -28,7 +28,7 @@
         <header class="main-header">
             <div class="brand">
                 <div class="brand-icon-wrap">
-                    <i class="fa-solid fa-battery-three-quarters"></i>
+                    <img src="/static/images/logo.png" alt="BMS Analytics Logo" class="brand-logo-img">
                 </div>
                 <div class="brand-text">
                     <h1>BMS Analytics</h1>
@@ -123,6 +123,33 @@
                             </div>
                         </div>
 
+                        <!-- EKF Parameter Mismatch -->
+                        <div class="control-group">
+                            <label for="mismatch-select">EKF Parameter Mismatch</label>
+                            <div class="select-wrapper">
+                                <select id="mismatch-select">
+                                    <option value="1.0">0% (Perfect Tuning)</option>
+                                    <option value="1.2">+20% Mismatch</option>
+                                    <option value="0.8">-20% Mismatch</option>
+                                    <option value="1.5">+50% Mismatch</option>
+                                </select>
+                                <i class="fa-solid fa-chevron-down select-arrow"></i>
+                            </div>
+                        </div>
+
+                        <!-- ESN Quantization Mode -->
+                        <div class="control-group">
+                            <label for="quantize-select">ML Quantization Precision</label>
+                            <div class="select-wrapper">
+                                <select id="quantize-select">
+                                    <option value="float32">Float32 (Standard)</option>
+                                    <option value="int16">INT16 Fixed-Point (Simulated)</option>
+                                    <option value="int8">INT8 Fixed-Point (Simulated)</option>
+                                </select>
+                                <i class="fa-solid fa-chevron-down select-arrow"></i>
+                            </div>
+                        </div>
+
                         <div class="control-divider"></div>
 
                         <!-- Accelerated Aging Toggle -->
@@ -143,6 +170,37 @@
 
             <!-- ── Main Telemetry Area ────────────────────────── -->
             <div class="main-content">
+
+                <!-- Battery Cell Status Card -->
+                <section class="dashboard-card battery-visualizer-card">
+                    <div class="battery-visual-left">
+                        <h2>Battery Cell State</h2>
+                        <p class="help-text">Real-Time Core Telemetry &amp; Charge Wavefront</p>
+                        
+                        <div class="battery-numerical-summary">
+                            <div class="summary-item">
+                                <span class="summary-label">True SOC</span>
+                                <div class="summary-val emerald-val" id="val-true-soc-large">100.0%</div>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">True SOH</span>
+                                <div class="summary-val blue-val" id="val-true-soh-large">100.0%</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="battery-visual-right">
+                        <div id="battery-thermal-glow"></div>
+                        <div class="battery-container-visual">
+                            <div class="battery-fluid-level" id="battery-fluid-level">
+                                <div id="battery-bubbles-container"></div>
+                            </div>
+                            <div class="battery-charging-bolt" id="battery-charging-bolt">
+                                <i class="fa-solid fa-bolt"></i>
+                            </div>
+                        </div>
+                    </div>
+                </section>
 
                 <!-- Metric Cards Row -->
                 <section class="metrics-grid">
@@ -176,7 +234,17 @@
                     <!-- SOC Estimators -->
                     <div class="metric-card estimator-card">
                         <div class="metric-info">
-                            <h3>State of Charge (SOC)</h3>
+                            <h3>
+                                State of Charge (SOC)
+                                <div class="info-tooltip-wrap">
+                                    <i class="fa-solid fa-circle-info"></i>
+                                    <div class="info-tooltip-content">
+                                        <strong>SOC Estimators</strong><br>
+                                        <strong>EKF</strong>: 2RC Extended Kalman Filter dynamically updating cell polarization.<br>
+                                        <strong>ESN</strong>: Echo State Network projectively tracking electrical transient states.
+                                    </div>
+                                </div>
+                            </h3>
                             <div class="sub-values">
                                 <div><span>EKF</span><strong id="val-ekf-soc">0.0%</strong></div>
                                 <div><span>ESN</span><strong id="val-esn-soc">0.0%</strong></div>
@@ -187,7 +255,17 @@
                     <!-- SOH Estimators -->
                     <div class="metric-card estimator-card">
                         <div class="metric-info">
-                            <h3>State of Health (SOH)</h3>
+                            <h3>
+                                State of Health (SOH)
+                                <div class="info-tooltip-wrap">
+                                    <i class="fa-solid fa-circle-info"></i>
+                                    <div class="info-tooltip-content">
+                                        <strong>SOH Estimators</strong><br>
+                                        <strong>EKF</strong>: Low-pass filtered dynamic resistance ratio (R₀ vs R₀,nom).<br>
+                                        <strong>ESN</strong>: Readout weights fitted to predict capacity degradation indices.
+                                    </div>
+                                </div>
+                            </h3>
                             <div class="sub-values">
                                 <div><span>EKF</span><strong id="val-ekf-soh">100.0%</strong></div>
                                 <div><span>ESN</span><strong id="val-esn-soh">100.0%</strong></div>

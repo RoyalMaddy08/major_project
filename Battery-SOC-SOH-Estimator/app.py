@@ -55,6 +55,8 @@ DEFAULT_SIM_STATE = {
     'active_cycle': 'udds',
     'accelerated_aging': False,
     'last_real_time': None,
+    'ekf_mismatch': 1.0,
+    'quantize_mode': 'float32',
     # Traditional EKF+CC states
     'cc_soc': 1.0,
     'ekf_soc': 1.0,
@@ -88,10 +90,13 @@ input_stds = None
 
 model_path = Config.MODEL_PATH
 
+model_last_modified = 0.0
+
 def load_ml_model():
-    global esn_soc, esn_soh, input_means, input_stds, model_loaded
+    global esn_soc, esn_soh, input_means, input_stds, model_loaded, model_last_modified
     if os.path.exists(model_path):
         try:
+            mtime = os.path.getmtime(model_path)
             with open(model_path, 'rb') as f:
                 package = pickle.load(f)
                 esn_soc = package['esn_soc']
@@ -99,13 +104,16 @@ def load_ml_model():
                 input_means = package['input_means']
                 input_stds = package['input_stds']
                 model_loaded = True
+                model_last_modified = mtime
                 print("Echo State Networks loaded successfully.")
         except Exception as e:
             print(f"Error loading model: {e}")
             model_loaded = False
+            model_last_modified = 0.0
     else:
         print(f"Warning: Model file not found at {model_path}. Please run train_rc.py first.")
         model_loaded = False
+        model_last_modified = 0.0
 
 # Connect to MongoDB
 try:
@@ -113,6 +121,7 @@ try:
     db_client.server_info()
     db = db_client[Config.MONGODB_DB_NAME]
     mongodb_connected = True
+    db[Config.MONGODB_READINGS_COLLECTION].create_index([("time", 1)])
     print("Successfully connected to MongoDB.")
 except Exception as e:
     print(f"Warning: Could not connect to MongoDB ({e}). Falling back to in-memory store.")
@@ -140,22 +149,30 @@ def save_readings_bulk(readings_list):
             r['_id'] = len(telemetry_fallback)
             telemetry_fallback.append(r)
 
-def get_all_readings():
+    # Cap local fallback array to prevent memory exhaustion in prolonged outages
+    if len(telemetry_fallback) > Config.TELEMETRY_FALLBACK_LIMIT:
+        telemetry_fallback = telemetry_fallback[-Config.TELEMETRY_FALLBACK_LIMIT:]
+
+def get_all_readings(limit=None):
+    if limit is None:
+        limit = Config.TELEMETRY_RESPONSE_LIMIT
     if mongodb_connected:
         try:
-            cursor = db[Config.MONGODB_READINGS_COLLECTION].find({}, {'_id': False}).sort('time', 1)
-            return list(cursor)
+            cursor = db[Config.MONGODB_READINGS_COLLECTION].find({}, {'_id': False}).sort('time', -1).limit(limit)
+            readings = list(cursor)
+            readings.reverse()  # Restore chronological order
+            return readings
         except Exception as e:
             print(f"Database read error: {e}")
-            return telemetry_fallback
+            return telemetry_fallback[-limit:]
     else:
-        return telemetry_fallback
+        return telemetry_fallback[-limit:]
 
 def clear_all_readings():
     global telemetry_fallback
     if mongodb_connected:
         try:
-            db[Config.MONGODB_READINGS_COLLECTION].drop()
+            db[Config.MONGODB_READINGS_COLLECTION].delete_many({})
         except Exception as e:
             print(f"Database clear error: {e}")
     telemetry_fallback = []
@@ -164,8 +181,10 @@ def load_sim_state():
     global global_sim_state
     if mongodb_connected:
         try:
-            state = db[Config.MONGODB_STATE_COLLECTION].find_one({}, {'_id': False})
+            state = db[Config.MONGODB_STATE_COLLECTION].find_one({'_id': 'singleton'})
             if state is not None:
+                # Remove internal _id key to keep structure clean
+                state.pop('_id', None)
                 return state
         except Exception as e:
             print(f"Error loading state from MongoDB: {e}")
@@ -175,7 +194,9 @@ def save_sim_state(state):
     global global_sim_state
     if mongodb_connected:
         try:
-            db[Config.MONGODB_STATE_COLLECTION].replace_one({}, state, upsert=True)
+            state_copy = state.copy()
+            state_copy['_id'] = 'singleton'
+            db[Config.MONGODB_STATE_COLLECTION].replace_one({'_id': 'singleton'}, state_copy, upsert=True)
             return
         except Exception as e:
             print(f"Error saving state to MongoDB: {e}")
@@ -197,13 +218,21 @@ def sync_simulator():
         return
 
     elapsed_real = now - last_real_time
+    
+    # Mitigate catch-up lag storms on cold start or after long inactivity.
+    # If lag exceeds Config.SIM_CATCHUP_THRESHOLD steps worth of real time,
+    # truncate to Config.SIM_TRUNCATE_STEPS so the catch-up loop never floods the server.
+    if elapsed_real > Config.SIM_CATCHUP_THRESHOLD * SIMULATION_STEP_DELAY:
+        last_real_time = now - Config.SIM_TRUNCATE_STEPS * SIMULATION_STEP_DELAY
+        elapsed_real = Config.SIM_TRUNCATE_STEPS * SIMULATION_STEP_DELAY
+
     steps_to_run = int(elapsed_real // SIMULATION_STEP_DELAY)
     
     if steps_to_run <= 0:
         return
 
-    # Cap steps to avoid serverless function timeouts
-    steps_to_run = min(steps_to_run, 100)
+    # Cap steps to avoid serverless function timeouts (Config.SIM_MAX_CATCHUP_STEPS)
+    steps_to_run = min(steps_to_run, Config.SIM_MAX_CATCHUP_STEPS)
 
     # Hydrate battery simulator from state
     chemistry_name = state.get('chemistry', 'li_ion')
@@ -218,9 +247,11 @@ def sync_simulator():
 
     active_cycle = state['active_cycle']
     accelerated_aging = state['accelerated_aging']
+    ekf_mismatch = state.get('ekf_mismatch', 1.0)
+    quantize_mode = state.get('quantize_mode', 'float32')
 
     # Hydrate estimators
-    ekf = ExtendedKalmanFilter(chemistry_name)
+    ekf = ExtendedKalmanFilter(chemistry_name, mismatch=ekf_mismatch)
     soh_tracker = ResistanceSOH(chemistry_name)
     
     cc_soc = state.get('cc_soc', 1.0)
@@ -246,6 +277,32 @@ def sync_simulator():
             esn_soc_state = [0.0] * esn_soc.n_reservoir
         if esn_soh_state is None or len(esn_soh_state) != esn_soh.n_reservoir:
             esn_soh_state = [0.0] * esn_soh.n_reservoir
+
+    # Reservoir priming: when the ESN is fresh (all-zero reservoir state after reset), warm up
+    # the recurrent reservoir by feeding the initial battery OCV conditions for Config.ESN_PRIMING_STEPS
+    # steps. This prevents the "cold start" convergence lag where predictions drift for 30-50s
+    # as the reservoir stabilises from its zero-initialised state.
+    if model_loaded and all(v == 0.0 for v in esn_soc_state[:10]):
+        V_prime = simulator.chemistry.lookup_ocv(simulator.soc)
+        I_prime = 0.0
+        T_prime = simulator.temperature
+        prime_history = []
+        prime_u_raw = extract_features_step(V_prime, I_prime, T_prime, prime_history)
+        prime_u_raw[3] = prime_u_raw[3] * (Config.DATASET_TIME_STEP / SIMULATION_STEP_DELAY)
+        prime_u_selected = prime_u_raw[Config.ESN_SELECTED_FEATURE_INDICES]
+        prime_u_scaled = (prime_u_selected - input_means) / input_stds
+
+        esn_soc.reset_state()
+        esn_soh.reset_state()
+        for _ in range(Config.ESN_PRIMING_STEPS):
+            # Drive reservoir state without making a prediction
+            esn_soc._update(prime_u_scaled.reshape(-1, 1))
+            esn_soh._update(prime_u_scaled.reshape(-1, 1))
+        esn_soc_state = esn_soc.get_state()
+        esn_soh_state = esn_soh.get_state()
+        print(f"[ESN] Reservoir primed ({Config.ESN_PRIMING_STEPS} steps). V_prime={V_prime:.3f}V, SOC={simulator.soc:.3f}")
+
+
 
     readings_to_save = []
 
@@ -297,17 +354,30 @@ def sync_simulator():
         if model_loaded:
             t0 = time.perf_counter()
             # Online feature extraction
-            u_raw = extract_features_step(V_meas, I_meas, T_meas=noisy_state['temperature'], history=rolling_history)
+            u_raw = extract_features_step(V_meas, -I_meas, noisy_state['temperature'], rolling_history)
+            # Normalise voltage gradient to match training dataset's time resolution vs simulation interval
+            u_raw[3] = u_raw[3] * (Config.DATASET_TIME_STEP / SIMULATION_STEP_DELAY)
+            
+            # Select robust electrical features via Config.ESN_SELECTED_FEATURE_INDICES
+            u_raw_selected = u_raw[Config.ESN_SELECTED_FEATURE_INDICES]
+            
             # Scale features
-            u_scaled = (u_raw - input_means) / input_stds
+            u_scaled = (u_raw_selected - input_means) / input_stds
             
             # Reset state to last step state vector
             esn_soc.reset_state(esn_soc_state)
             esn_soh.reset_state(esn_soh_state)
             
             # Predict step-wise
-            pred_soc_val = esn_soc.predict_step(u_scaled)
-            pred_soh_val = esn_soh.predict_step(u_scaled)
+            pred_soc_val = esn_soc.predict_step(u_scaled, quantize_mode=quantize_mode)
+            pred_soh_val = esn_soh.predict_step(u_scaled, quantize_mode=quantize_mode)
+            
+            # Print debug info once every 5 simulation seconds
+            if int(simulator.time) % 5 == 0:
+                print(f"[ESN Debug] Time: {simulator.time}s")
+                print(f"  u_raw_selected: {u_raw_selected.tolist()}")
+                print(f"  u_scaled: {u_scaled.tolist()}")
+                print(f"  Pred SOC: {pred_soc_val[0]:.4f}, Pred SOH: {pred_soh_val[0]:.4f}")
             
             # Capture new state vectors
             esn_soc_state = esn_soc.get_state()
@@ -316,9 +386,9 @@ def sync_simulator():
             esn_soc_pred = float(np.clip(pred_soc_val[0], 0.0, 1.0))
             esn_soh_pred = float(np.clip(pred_soh_val[0], 0.0, 1.0))
             
-            # Update rolling history (limit to size 4)
-            rolling_history.append({'voltage': V_meas, 'current': I_meas, 'temperature': noisy_state['temperature']})
-            if len(rolling_history) > 4:
+            # Update rolling history (capped to Config.FEATURE_ROLLING_WINDOW - 1 past entries)
+            rolling_history.append({'voltage': V_meas, 'current': -I_meas, 'temperature': noisy_state['temperature']})
+            if len(rolling_history) > Config.FEATURE_ROLLING_WINDOW - 1:
                 rolling_history.pop(0)
                 
             esn_time = (time.perf_counter() - t0) * 1000.0  # ms
@@ -337,6 +407,8 @@ def sync_simulator():
             'esn_soc': esn_soc_pred,
             'esn_soh': esn_soh_pred,
             'trad_soh': trad_soh,
+            'true_soc': sim_output['true_soc'],
+            'true_soh': sim_output['true_soh'],
             # Benchmark telemetry
             'ekf_time': ekf_time,
             'esn_time': esn_time,
@@ -362,6 +434,8 @@ def sync_simulator():
         'active_cycle': active_cycle,
         'accelerated_aging': accelerated_aging,
         'last_real_time': last_real_time + (steps_to_run * SIMULATION_STEP_DELAY),
+        'ekf_mismatch': ekf_mismatch,
+        'quantize_mode': quantize_mode,
         'cc_soc': cc_soc,
         'ekf_soc': ekf_soc,
         'ekf_v1': ekf_v1,
@@ -385,115 +459,152 @@ def index():
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
-    global model_loaded
-    if not model_loaded:
-        load_ml_model()
+    try:
+        global model_loaded, model_last_modified
+        if os.path.exists(model_path):
+            mtime = os.path.getmtime(model_path)
+            if mtime > model_last_modified:
+                load_ml_model()
+        elif not model_loaded:
+            load_ml_model()
+            
+        sync_simulator()
+        state = load_sim_state()
         
-    sync_simulator()
-    state = load_sim_state()
-    
-    return jsonify({
-        'sim_running': state['sim_running'],
-        'active_cycle': state['active_cycle'],
-        'accelerated_aging': state['accelerated_aging'],
-        'model_loaded': model_loaded,
-        'mongodb_connected': mongodb_connected,
-        'battery_time': state['time'],
-        'chemistry': state.get('chemistry', 'li_ion')
-    })
+        return jsonify({
+            'sim_running': state['sim_running'],
+            'active_cycle': state['active_cycle'],
+            'accelerated_aging': state['accelerated_aging'],
+            'model_loaded': model_loaded,
+            'mongodb_connected': mongodb_connected,
+            'battery_time': state['time'],
+            'chemistry': state.get('chemistry', 'li_ion'),
+            'ekf_mismatch': state.get('ekf_mismatch', 1.0),
+            'quantize_mode': state.get('quantize_mode', 'float32')
+        })
+    except Exception as e:
+        print(f"Error in /api/status: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/api/control', methods=['POST'])
 def control_simulation():
-    data = request.json or {}
-    command = data.get('command')
-    chemistry = data.get('chemistry')
-    
-    sync_simulator()
-    state = load_sim_state()
-    
-    # Initialize chemistry transition
-    if chemistry is not None:
-        state['chemistry'] = chemistry
-        command = 'reset'  # Force reset when switching chemistry
+    try:
+        data = request.json or {}
+        command = data.get('command')
+        chemistry = data.get('chemistry')
+        
+        sync_simulator()
+        state = load_sim_state()
+        
+        # Initialize chemistry transition
+        if chemistry is not None:
+            state['chemistry'] = chemistry
+            command = 'reset'  # Force reset when switching chemistry
 
-    if command == 'start':
-        state['sim_running'] = True
-        state['last_real_time'] = time.time()
-    elif command == 'stop':
-        state['sim_running'] = False
-    elif command == 'reset':
-        active_chem = state.get('chemistry', 'li_ion')
-        chem_obj = get_chemistry(active_chem)
-        
-        state['sim_running'] = False
-        state['time'] = 0.0
-        state['soc'] = 1.0
-        state['soh'] = 1.0
-        state['V1'] = 0.0
-        state['V2'] = 0.0
-        state['temperature'] = 25.0
-        state['internal_resistance_growth'] = 1.0
-        state['last_real_time'] = None
-        state['cc_soc'] = 1.0
-        state['ekf_soc'] = 1.0
-        state['ekf_v1'] = 0.0
-        state['ekf_v2'] = 0.0
-        state['ekf_p'] = [[0.01, 0.0, 0.0], [0.0, 0.01, 0.0], [0.0, 0.0, 0.01]]
-        state['trad_soh'] = 1.0
-        state['trad_r0'] = chem_obj.R0_nom
-        state['prev_voltage'] = chem_obj.lookup_ocv(1.0)
-        state['prev_current'] = 0.0
-        state['esn_soc_state'] = None
-        state['esn_soh_state'] = None
-        state['esn_soc_pred'] = 1.0
-        state['esn_soh_pred'] = 1.0
-        state['rolling_history'] = []
-        clear_all_readings()
-        
-    if 'cycle_type' in data:
-        state['active_cycle'] = data['cycle_type']
-        
-    if 'accelerated_aging' in data:
-        state['accelerated_aging'] = bool(data['accelerated_aging'])
-        
-    save_sim_state(state)
-    return jsonify({
-        'status': 'ok',
-        'sim_running': state['sim_running'],
-        'active_cycle': state['active_cycle'],
-        'accelerated_aging': state['accelerated_aging'],
-        'chemistry': state.get('chemistry', 'li_ion')
-    })
+        if command == 'start':
+            state['sim_running'] = True
+            state['last_real_time'] = time.time()
+        elif command == 'stop':
+            state['sim_running'] = False
+        elif command == 'reset':
+            active_chem = state.get('chemistry', 'li_ion')
+            chem_obj = get_chemistry(active_chem)
+            
+            state['sim_running'] = False
+            state['time'] = 0.0
+            state['soc'] = 1.0
+            state['soh'] = 1.0
+            state['V1'] = 0.0
+            state['V2'] = 0.0
+            state['temperature'] = 25.0
+            state['internal_resistance_growth'] = 1.0
+            state['last_real_time'] = None
+            state['cc_soc'] = 1.0
+            state['ekf_soc'] = 1.0
+            state['ekf_v1'] = 0.0
+            state['ekf_v2'] = 0.0
+            state['ekf_p'] = [[0.01, 0.0, 0.0], [0.0, 0.01, 0.0], [0.0, 0.0, 0.01]]
+            state['trad_soh'] = 1.0
+            state['trad_r0'] = chem_obj.R0_nom
+            state['prev_voltage'] = chem_obj.lookup_ocv(1.0)
+            state['prev_current'] = 0.0
+            state['esn_soc_state'] = None
+            state['esn_soh_state'] = None
+            state['esn_soc_pred'] = 1.0
+            state['esn_soh_pred'] = 1.0
+            state['rolling_history'] = []
+            clear_all_readings()
+            
+        if 'cycle_type' in data:
+            state['active_cycle'] = data['cycle_type']
+            
+        if 'accelerated_aging' in data:
+            state['accelerated_aging'] = bool(data['accelerated_aging'])
+
+        if 'ekf_mismatch' in data:
+            state['ekf_mismatch'] = float(data['ekf_mismatch'])
+
+        if 'quantize_mode' in data:
+            state['quantize_mode'] = str(data['quantize_mode'])
+            
+        save_sim_state(state)
+        return jsonify({
+            'status': 'ok',
+            'sim_running': state['sim_running'],
+            'active_cycle': state['active_cycle'],
+            'accelerated_aging': state['accelerated_aging'],
+            'chemistry': state.get('chemistry', 'li_ion'),
+            'ekf_mismatch': state.get('ekf_mismatch', 1.0),
+            'quantize_mode': state.get('quantize_mode', 'float32')
+        })
+    except Exception as e:
+        print(f"Error in /api/control: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/api/telemetry', methods=['GET'])
 def get_telemetry():
-    sync_simulator()
-    readings = get_all_readings()
-    
-    telemetry_data = []
-    for r in readings:
-        telemetry_data.append({
-            'time': r.get('time', 0.0),
-            'voltage': r.get('voltage', 0.0),
-            'current': r.get('current', 0.0),
-            'temperature': r.get('temperature', 25.0),
-            'ekf_soc': r.get('ekf_soc', 1.0),
-            'ekf_soh': r.get('ekf_soh', 1.0),
-            'esn_soc': r.get('esn_soc', 1.0),
-            'esn_soh': r.get('esn_soh', 1.0),
-            'cc_soc': r.get('cc_soc', r.get('ekf_soc', 1.0)),
-            'trad_soh': r.get('trad_soh', r.get('ekf_soh', 1.0)),
-            # Benchmarking
-            'ekf_time': r.get('ekf_time', 0.0),
-            'esn_time': r.get('esn_time', 0.0),
-            'cpu_usage': r.get('cpu_usage', 0.0),
-            'mem_usage': r.get('mem_usage', 0.0)
-        })
+    try:
+        sync_simulator()
+        readings = get_all_readings()
         
-    return jsonify({
-        'model_loaded': model_loaded,
-        'data': telemetry_data
-    })
+        telemetry_data = []
+        for r in readings:
+            telemetry_data.append({
+                'time': r.get('time', 0.0),
+                'voltage': r.get('voltage', 0.0),
+                'current': r.get('current', 0.0),
+                'temperature': r.get('temperature', 25.0),
+                'ekf_soc': r.get('ekf_soc', 1.0),
+                'ekf_soh': r.get('ekf_soh', 1.0),
+                'esn_soc': r.get('esn_soc', 1.0),
+                'esn_soh': r.get('esn_soh', 1.0),
+                'cc_soc': r.get('cc_soc', r.get('ekf_soc', 1.0)),
+                'trad_soh': r.get('trad_soh', r.get('ekf_soh', 1.0)),
+                'true_soc': r.get('true_soc', r.get('ekf_soc', 1.0)),
+                'true_soh': r.get('true_soh', r.get('ekf_soh', 1.0)),
+                # Benchmarking
+                'ekf_time': r.get('ekf_time', 0.0),
+                'esn_time': r.get('esn_time', 0.0),
+                'cpu_usage': r.get('cpu_usage', 0.0),
+                'mem_usage': r.get('mem_usage', 0.0)
+            })
+            
+        return jsonify({
+            'model_loaded': model_loaded,
+            'data': telemetry_data
+        })
+    except Exception as e:
+        print(f"Error in /api/telemetry: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 load_ml_model()
 
