@@ -170,15 +170,32 @@ def load_ml_model():
         loaded_soh_rmse = None
         print("Warning: Model not found locally or on DB. Running with blank weights.")
 
-def check_simulator_port():
+_last_sim_check_time = 0.0
+_cached_port_online = False
+_cached_port_data = None
+
+def check_simulator_port(force=False):
+    global _last_sim_check_time, _cached_port_online, _cached_port_data
+    now = time.time()
+    # Dual-duration cache: 5.0s if offline (prevent UI lag), 0.5s if online (prevent request stacking)
+    cache_duration = 5.0 if not _cached_port_online else 0.5
+    if not force and now - _last_sim_check_time < cache_duration and _last_sim_check_time > 0.0:
+        return _cached_port_online, _cached_port_data
+        
+    _last_sim_check_time = now
     try:
         url = f"{Config.SIMULATOR_URL}/api/status"
-        with urllib.request.urlopen(url, timeout=0.5) as response:
+        # Increased timeout from 0.5s to 1.5s to account for Render instance wakeups
+        with urllib.request.urlopen(url, timeout=1.5) as response:
             if response.status == 200:
                 data = json.loads(response.read().decode())
+                _cached_port_online = True
+                _cached_port_data = data
                 return True, data
     except Exception:
         pass
+    _cached_port_online = False
+    _cached_port_data = None
     return False, None
 
 # Shared state memory
@@ -555,7 +572,8 @@ def get_status():
             'fault_dropout': fault_dropout,
             'fault_short': fault_short,
             'soc_rmse': loaded_soc_rmse,
-            'soh_rmse': loaded_soh_rmse
+            'soh_rmse': loaded_soh_rmse,
+            'graph_slice_limit': Config.GRAPH_SLICE_LIMIT
         })
     except Exception as e:
         print(f"Error in /api/status: {e}")
@@ -585,6 +603,8 @@ def control_simulation():
                     state[key] = bool(data[key])
                 else:
                     state[key] = data[key]
+        if 'cycle_type' in data:
+            state['active_cycle'] = data['cycle_type']
 
         command = data.get('command')
         if command == 'start':
@@ -631,8 +651,8 @@ def control_simulation():
         if reset_trigger or 'ekf_mismatch' in data or 'quantize_mode' in data:
             _telemetry_cache.update({'key': None, 'pipeline': None, 'processed': [], 'n_cached': 0})
         
-        # Forward control payload to Config.SIMULATOR_URL if online
-        port_online, _ = check_simulator_port()
+        # Forward control payload to Config.SIMULATOR_URL if online (force live check)
+        port_online, _ = check_simulator_port(force=True)
         if port_online:
             try:
                 sim_data = data.copy()
@@ -645,10 +665,29 @@ def control_simulation():
                     headers={'Content-Type': 'application/json'},
                     method='POST'
                 )
-                with urllib.request.urlopen(req, timeout=0.3) as response:
-                    pass
+                # Increased timeout to 1.5s to prevent false timeouts on Render
+                with urllib.request.urlopen(req, timeout=1.5) as response:
+                    if response.status == 200:
+                        sim_resp = json.loads(response.read().decode())
+                        # Update cache with the simulator's updated status values
+                        global _cached_port_data
+                        _cached_port_data = {
+                            'sim_running': sim_resp.get('sim_running', False),
+                            'active_cycle': sim_resp.get('active_cycle', 'udds'),
+                            'accelerated_aging': sim_resp.get('accelerated_aging', False),
+                            'chemistry': sim_resp.get('chemistry', 'li_ion'),
+                            'T_ambient': sim_resp.get('T_ambient', 25.0),
+                            'fault_thermal': sim_resp.get('fault_thermal', False),
+                            'fault_dropout': sim_resp.get('fault_dropout', False),
+                            'fault_short': sim_resp.get('fault_short', False),
+                            'time': sim_resp.get('time', 0.0)
+                        }
             except Exception as forward_err:
                 print(f"Failed to forward control to simulator: {forward_err}")
+                
+        # Invalidate visualizer status cache check time so next status poll triggers a fresh live query
+        global _last_sim_check_time
+        _last_sim_check_time = 0.0
                 
         return jsonify({
             'status': 'ok',
@@ -697,7 +736,8 @@ def get_telemetry():
             if port_online:
                 try:
                     url = f"{Config.SIMULATOR_URL}/api/readings"
-                    with urllib.request.urlopen(url, timeout=0.5) as response:
+                    # Increased timeout to 1.5s to handle Render network variance
+                    with urllib.request.urlopen(url, timeout=1.5) as response:
                         if response.status == 200:
                             raw_readings = json.loads(response.read().decode())
                 except Exception as e:

@@ -57,6 +57,11 @@
                     <span class="dot pulse-red"></span>
                     <span class="label">ESN Model: Checking…</span>
                 </div>
+                <div class="status-indicator" id="readout-mode-badge" style="display: none; background: var(--accent-blue-lt); border-color: rgba(29, 78, 216, 0.3);">
+                    <i class="fa-solid fa-clock-rotate-left" style="color: var(--accent-blue); margin-right: 4px;"></i>
+                    <span class="label" id="readout-mode-label" style="font-weight: 600; color: var(--accent-blue);">Live Mode</span>
+                    <button id="btn-resume-live" style="background: none; border: none; color: var(--accent-blue); cursor: pointer; padding: 0; margin-left: 8px; font-weight: 700; font-size: 11px; text-decoration: underline;" title="Resume Live Mode">Resume Live</button>
+                </div>
             </div>
         </header>
 
@@ -110,15 +115,19 @@
                     </div>
                 </section>
                 
-                <!-- Simulator Live Status Reference -->
+                <!-- Simulator Live Status -->
                 <section class="dashboard-card control-card margin-top-md">
                     <div class="card-header">
                         <h2><i class="fa-solid fa-tower-broadcast"></i> Simulator State</h2>
                     </div>
-                    <div class="card-body font-sans" style="font-size: 13px; color: var(--text-secondary); gap: 14px;">
+                    <div class="card-body font-sans" style="font-size: 13px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 10px;">
                         <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 6px;">
-                            <span>Generator Running:</span>
-                            <strong id="val-sim-running" class="font-blue">No</strong>
+                            <span>Connection Link:</span>
+                            <strong id="val-sim-port" class="text-rose">Offline</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 6px;">
+                            <span>Generator Status:</span>
+                            <strong id="val-sim-running" class="text-rose">Idle</strong>
                         </div>
                         <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 6px;">
                             <span>Active Chemistry:</span>
@@ -144,6 +153,8 @@
                                 <div id="status-injected-dropout" style="color: var(--text-muted);"><i class="fa-solid fa-circle" style="font-size: 8px; margin-right: 6px;"></i>Sensor Dropout Fault</div>
                             </div>
                         </div>
+                    </div>
+                </section>
                     </div>
                 </section>
 
@@ -305,11 +316,17 @@
                             <div class="summary-estimator-body">
                                 <div class="estimator-sub-row">
                                     <div class="est-label">EKF + CC Estimation:</div>
-                                    <div class="est-val font-amber" id="val-ekf-soc">--%</div>
+                                    <div style="text-align: right;">
+                                        <div class="est-val font-amber" id="val-ekf-soc">--%</div>
+                                        <div style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Error: <strong id="val-ekf-soc-error">--%</strong></div>
+                                    </div>
                                 </div>
                                 <div class="estimator-sub-row">
                                     <div class="est-label">ESN Reservoir ML:</div>
-                                    <div class="est-val font-blue" id="val-esn-soc">--%</div>
+                                    <div style="text-align: right;">
+                                        <div class="est-val font-blue" id="val-esn-soc">--%</div>
+                                        <div style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Error: <strong id="val-esn-soc-error">--%</strong></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -323,11 +340,17 @@
                             <div class="summary-estimator-body">
                                 <div class="estimator-sub-row">
                                     <div class="est-label">EKF resistance tracker:</div>
-                                    <div class="est-val font-amber" id="val-ekf-soh">--%</div>
+                                    <div style="text-align: right;">
+                                        <div class="est-val font-amber" id="val-ekf-soh">--%</div>
+                                        <div style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Error: <strong id="val-ekf-soh-error">--%</strong></div>
+                                    </div>
                                 </div>
                                 <div class="estimator-sub-row">
                                     <div class="est-label">ESN Reservoir ML:</div>
-                                    <div class="est-val font-violet" id="val-esn-soh">--%</div>
+                                    <div style="text-align: right;">
+                                        <div class="est-val font-violet" id="val-esn-soh">--%</div>
+                                        <div style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Error: <strong id="val-esn-soh-error">--%</strong></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -353,6 +376,7 @@
                             </div>
                         </section>
                     </div>
+
                 </div>
 
             </div><!-- /main-content -->
@@ -363,7 +387,6 @@
         </footer>
 
     </div><!-- /app-container -->
-
     <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

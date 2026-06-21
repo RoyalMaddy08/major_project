@@ -1,7 +1,7 @@
 import numpy as np
 
 class BatteryChemistry:
-    def __init__(self, name, nominal_capacity, R0_nom, R1_nom, C1_nom, R2_nom, C2_nom, thermal_capacitance, cooling_coefficient, ocv_table):
+    def __init__(self, name, nominal_capacity, R0_nom, R1_nom, C1_nom, R2_nom, C2_nom, thermal_capacitance, cooling_coefficient, ocv_table, n_cells):
         self.name = name
         self.nominal_capacity = nominal_capacity  # Ah
         self.R0_nom = R0_nom                      # Ohms
@@ -12,6 +12,7 @@ class BatteryChemistry:
         self.thermal_capacitance = thermal_capacitance  # J/K
         self.cooling_coefficient = cooling_coefficient  # W/K
         self.ocv_table = ocv_table                      # List of (SOC, OCV)
+        self.n_cells = n_cells
 
     def lookup_ocv(self, soc):
         s = np.clip(soc, 0.0, 1.0)
@@ -45,7 +46,8 @@ NMC_Chemistry = BatteryChemistry(
     C2_nom=5000 / 3,
     thermal_capacitance=80.0,
     cooling_coefficient=0.25,
-    ocv_table=NMC_OCV_TABLE
+    ocv_table=NMC_OCV_TABLE,
+    n_cells=3
 )
 
 # LFP 3S (3 Cells in Series, 9.6V nominal, very flat OCV)
@@ -74,7 +76,8 @@ LFP_Chemistry = BatteryChemistry(
     C2_nom=6000 / 3,
     thermal_capacitance=90.0,
     cooling_coefficient=0.30,
-    ocv_table=LFP_OCV_TABLE
+    ocv_table=LFP_OCV_TABLE,
+    n_cells=3
 )
 
 # Lead-Acid 6S (6 Cells in Series, 12.0V nominal)
@@ -103,7 +106,8 @@ LeadAcid_Chemistry = BatteryChemistry(
     C2_nom=8000 / 6,
     thermal_capacitance=200.0,
     cooling_coefficient=0.15,
-    ocv_table=LeadAcid_OCV_TABLE
+    ocv_table=LeadAcid_OCV_TABLE,
+    n_cells=6
 )
 
 # Generic Li-ion 3S (uses NMC profile)
@@ -117,7 +121,8 @@ LiIon_Chemistry = BatteryChemistry(
     C2_nom=5000 / 3,
     thermal_capacitance=80.0,
     cooling_coefficient=0.25,
-    ocv_table=NMC_OCV_TABLE
+    ocv_table=NMC_OCV_TABLE,
+    n_cells=3
 )
 
 CHEMISTRIES = {

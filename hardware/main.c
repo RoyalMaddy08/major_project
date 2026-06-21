@@ -22,6 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdint.h>
+#include <math.h>
+#include "esn_classifier_weights.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,15 +42,155 @@
 
 /* USER CODE END PM */
 
-/* Private variables ---------------------------------------------------------*/
 
-COM_InitTypeDef BspCOMInit;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 #define N 500
-float x = 0.0f;   //reservoir state (memory)
+#define ESN_FIXED_POINT 0 // Set to 1 to enable Q15 Fixed-Point ESN Inference
+
+// Reservoir states
+float esn_x[ESN_N_RESERVOIR] = {0.0f};
+int16_t esn_x_q[ESN_N_RESERVOIR] = {0};
+
+// Helper function to scale float to Q15
+int16_t float_to_q15(float v) {
+    float temp = v * 32768.0f;
+    if (temp >= 32767.0f) return 32767;
+    if (temp <= -32768.0f) return -32768;
+    return (int16_t)temp;
+}
+
+// Helper function to scale float to Q12
+int16_t float_to_q12(float v) {
+    float temp = v * 4096.0f;
+    if (temp >= 32767.0f) return 32767;
+    if (temp <= -32768.0f) return -32768;
+    return (int16_t)temp;
+}
+
+// Tanh function in Q15 simulated precision
+int16_t q15_tanh(int16_t x_q15) {
+    float x_f = (float)x_q15 / 32768.0f;
+    float y_f = tanhf(x_f);
+    return (int16_t)(y_f * 32767.0f);
+}
+
+// Perform ESN prediction step in float32 (with CSR optimization)
+void esn_predict_float(const float u[ESN_N_INPUTS], float y_pred[ESN_N_OUTPUTS]) {
+    // 1. Scale inputs using means and standard deviations
+    float u_scaled[ESN_N_INPUTS];
+    for (int i = 0; i < ESN_N_INPUTS; i++) {
+        u_scaled[i] = (u[i] - esn_input_means[i]) / esn_input_stds[i];
+    }
+
+    // 2. Update reservoir states using CSR Sparse Matrix Multiplication
+    float arg[ESN_N_RESERVOIR];
+    for (int i = 0; i < ESN_N_RESERVOIR; i++) {
+        // Bias + input multiplication
+        float sum = esn_W_in[i][0] * 1.0f; // Bias input is 1.0f
+        for (int j = 0; j < ESN_N_INPUTS; j++) {
+            sum += esn_W_in[i][1 + j] * u_scaled[j];
+        }
+
+        // Sparse reservoir matrix multiplication (SpMV via CSR)
+        uint16_t start = esn_W_res_row_ptr[i];
+        uint16_t end = esn_W_res_row_ptr[i + 1];
+        for (uint16_t k = start; k < end; k++) {
+            uint16_t col_idx = esn_W_res_col[k];
+            sum += esn_W_res_val[k] * esn_x[col_idx];
+        }
+        arg[i] = sum;
+    }
+
+    // 3. Apply leak rate and tanh activation
+    for (int i = 0; i < ESN_N_RESERVOIR; i++) {
+        esn_x[i] = (1.0f - ESN_LEAK_RATE) * esn_x[i] + ESN_LEAK_RATE * tanhf(arg[i]);
+    }
+
+    // 4. Compute output: y_pred = W_out * [1.0, u_scaled, esn_x]
+    for (int i = 0; i < ESN_N_OUTPUTS; i++) {
+        float sum = esn_W_out[i][0] * 1.0f; // Bias
+        for (int j = 0; j < ESN_N_INPUTS; j++) {
+            sum += esn_W_out[i][1 + j] * u_scaled[j];
+        }
+        for (int j = 0; j < ESN_N_RESERVOIR; j++) {
+            sum += esn_W_out[i][1 + ESN_N_INPUTS + j] * esn_x[j];
+        }
+        y_pred[i] = sum;
+    }
+}
+
+// Perform ESN prediction step in Q15 fixed-point (with CSR optimization)
+void esn_predict_fixed(const float u[ESN_N_INPUTS], float y_pred[ESN_N_OUTPUTS]) {
+    // 1. Scale inputs and convert to Q12 format (range +/- 8.0)
+    int16_t u_scaled_q12[ESN_N_INPUTS];
+    for (int i = 0; i < ESN_N_INPUTS; i++) {
+        float val = (u[i] - esn_input_means[i]) / esn_input_stds[i];
+        u_scaled_q12[i] = float_to_q12(val);
+    }
+
+    // 2. Update reservoir states in Q15 format using CSR
+    int16_t arg_q15[ESN_N_RESERVOIR];
+    for (int i = 0; i < ESN_N_RESERVOIR; i++) {
+        // Bias term: W_in[i][0] is in Q15. Bias input is 1.0 (Q12 scale 4096)
+        // (Q15 * Q12) >> 12 = Q15
+        int32_t sum = ((int32_t)float_to_q15(esn_W_in[i][0]) * 4096) >> 12;
+
+        // Input terms: W_in[i][1+j] is in Q15, u_scaled_q12 is in Q12
+        // (Q15 * Q12) >> 12 = Q15
+        for (int j = 0; j < ESN_N_INPUTS; j++) {
+            sum += ((int32_t)float_to_q15(esn_W_in[i][1 + j]) * u_scaled_q12[j]) >> 12;
+        }
+
+        // Reservoir terms: W_res is in Q15, esn_x_q is in Q15
+        // (Q15 * Q15) >> 15 = Q15
+        uint16_t start = esn_W_res_row_ptr[i];
+        uint16_t end = esn_W_res_row_ptr[i + 1];
+        for (uint16_t k = start; k < end; k++) {
+            uint16_t col_idx = esn_W_res_col[k];
+            sum += ((int32_t)float_to_q15(esn_W_res_val[k]) * esn_x_q[col_idx]) >> 15;
+        }
+        
+        // Clip to avoid overflow before tanh
+        if (sum > 32767) sum = 32767;
+        if (sum < -32768) sum = -32768;
+        arg_q15[i] = (int16_t)sum;
+    }
+
+    // 3. Apply leak rate and tanh activation in Q15:
+    // x_q(t) = (1 - alpha) * x_q(t-1) + alpha * tanh(arg_q15)
+    // ESN_LEAK_RATE is 0.3f, which in Q15 is 9830.
+    // 1 - ESN_LEAK_RATE is 0.7f, which in Q15 is 22938.
+    int16_t leak_rate_q15 = 9830;
+    int16_t one_minus_leak_rate_q15 = 22938;
+
+    for (int i = 0; i < ESN_N_RESERVOIR; i++) {
+        int16_t tanh_val = q15_tanh(arg_q15[i]);
+        int32_t state_update = ((int32_t)one_minus_leak_rate_q15 * esn_x_q[i]) >> 15;
+        state_update += ((int32_t)leak_rate_q15 * tanh_val) >> 15;
+        
+        if (state_update > 32767) state_update = 32767;
+        if (state_update < -32768) state_update = -32768;
+        esn_x_q[i] = (int16_t)state_update;
+    }
+
+    // 4. Compute output: y_pred = W_out * [1.0, u_scaled, esn_x_q] (Readout in float)
+    for (int i = 0; i < ESN_N_OUTPUTS; i++) {
+        float sum = esn_W_out[i][0] * 1.0f; // Bias
+        for (int j = 0; j < ESN_N_INPUTS; j++) {
+            float val = (u[j] - esn_input_means[j]) / esn_input_stds[j];
+            sum += esn_W_out[i][1 + j] * val;
+        }
+        for (int j = 0; j < ESN_N_RESERVOIR; j++) {
+            float state_f = (float)esn_x_q[j] / 32768.0f;
+            sum += esn_W_out[i][1 + ESN_N_INPUTS + j] * state_f;
+        }
+        y_pred[i] = sum;
+    }
+}
+
 float data[500][4] = {
   {11.685, 2.388, 32.538, 0},
   {11.457, 2.311, 32.541, 0},
@@ -613,68 +756,82 @@ int main(void)
   printf("System Started\r\n");
   /* USER CODE END 2 */
 
-  /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
-  BspCOMInit.BaudRate   = 115200;
-  BspCOMInit.WordLength = COM_WORDLENGTH_8B;
-  BspCOMInit.StopBits   = COM_STOPBITS_1;
-  BspCOMInit.Parity     = COM_PARITY_NONE;
-  BspCOMInit.HwFlowCtl  = COM_HWCONTROL_NONE;
-  if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
+
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      int correct_predictions = 0;
 
-	  for(int k = 0; k < N; k++)
-	  {
-	      float V = data[k][0];
-	      float I = data[k][1];
-	      float T = data[k][2];
+      // Reset ESN states at the start of loop
+      #if ESN_FIXED_POINT
+      for(int i = 0; i < ESN_N_RESERVOIR; i++) esn_x_q[i] = 0;
+      #else
+      for(int i = 0; i < ESN_N_RESERVOIR; i++) esn_x[i] = 0.0f;
+      #endif
 
-	      // -------- Reservoir Computing --------
-	      float input = V + I + T;
+      printf("\r\n--- Starting ESN Inference Loop (N=%d) ---\r\n", N);
 
-	      // memory + nonlinearity
-	      x = 0.85f * x + 0.15f * input;
+      for(int k = 0; k < N; k++)
+      {
+          float V = data[k][0];
+          float I = data[k][1];
+          float T = data[k][2];
+          int true_state = (int)data[k][3];
 
-	      // simple nonlinearity (important for RC)
-	      float y = x * x;
+          float u[ESN_N_INPUTS] = {V, I, T};
+          float y_pred[ESN_N_OUTPUTS] = {0.0f};
 
-	      int state;
+          // -------- Reservoir Computing Inference --------
+          #if ESN_FIXED_POINT
+          esn_predict_fixed(u, y_pred);
+          #else
+          esn_predict_float(u, y_pred);
+          #endif
 
-	      // -------- Readout (classification) --------
-	      if(y < 2000)
-	          state = 0;
-	      else if(y < 4000)
-	          state = 1;
-	      else
-	          state = 2;
+          // Argmax readout classification
+          int predicted_state = 0;
+          float max_val = y_pred[0];
+          for (int i = 1; i < ESN_N_OUTPUTS; i++) {
+              if (y_pred[i] > max_val) {
+                  max_val = y_pred[i];
+                  predicted_state = i;
+              }
+          }
 
-	      // -------- Output --------
-	      switch(state)
-	      {
-	          case 0:
-	              printf("NORMAL  V=%d I=%d T=%d\r\n", (int)V, (int)I, (int)T);
-	              HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-	              break;
+          if (predicted_state == true_state) {
+              correct_predictions++;
+          }
 
-	          case 1:
-	              printf("WARNING V=%d I=%d T=%d\r\n", (int)V, (int)I, (int)T);
-	              HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-	              break;
+          // -------- Output and Control --------
+          const char* label_str[] = {"NORMAL  ", "WARNING ", "CRITICAL"};
+          printf("[%3d] True=%s Pred=%s | V=%d I=%d T=%d\r\n", 
+                 k, label_str[true_state], label_str[predicted_state], 
+                 (int)V, (int)I, (int)T);
 
-	          case 2:
-	              printf("CRITICAL V=%d I=%d T=%d\r\n", (int)V, (int)I, (int)T);
-	              HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-	              break;
-	      }
+          switch(predicted_state)
+          {
+              case 0:
+                  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+                  break;
 
-	      HAL_Delay(100);
-	  }    /* USER CODE END WHILE */
+              case 1:
+                  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+                  break;
+
+              case 2:
+                  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+                  break;
+          }
+
+          HAL_Delay(50); // Fast delay for simulation
+      }
+
+      float accuracy = ((float)correct_predictions / N) * 100.0f;
+      printf("--- Loop Complete. Accuracy: %.2f%% ---\r\n\r\n", accuracy);
+      HAL_Delay(5000);
+      /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
@@ -756,7 +913,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 9600;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;

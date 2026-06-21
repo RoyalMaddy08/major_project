@@ -509,19 +509,85 @@ def post_control():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+import atexit
+import tempfile
+
+LOCK_FILE = os.path.join(tempfile.gettempdir(), 'battery_simulator_thread.lock')
+
+def _is_pid_alive(pid):
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+    except (AttributeError, ValueError):
+        try:
+            import subprocess
+            out = subprocess.check_output(f'tasklist /FI "PID eq {pid}"', shell=True, stderr=subprocess.DEVNULL)
+            return str(pid) in out.decode()
+        except Exception:
+            return True
+
+def _acquire_lock():
+    pid = os.getpid()
+    try:
+        fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, 'w') as f:
+            f.write(str(pid))
+        return True
+    except FileExistsError:
+        try:
+            with open(LOCK_FILE, 'r') as f:
+                holder_pid = int(f.read().strip())
+        except Exception:
+            holder_pid = None
+
+        if holder_pid is None:
+            try:
+                os.remove(LOCK_FILE)
+            except Exception:
+                pass
+            return _acquire_lock()
+
+        if not _is_pid_alive(holder_pid):
+            try:
+                os.remove(LOCK_FILE)
+            except Exception:
+                pass
+            return _acquire_lock()
+        else:
+            return False
+
+def _release_lock():
+    try:
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE, 'r') as f:
+                holder_pid = int(f.read().strip())
+            if holder_pid == os.getpid():
+                os.remove(LOCK_FILE)
+    except Exception:
+        pass
+
+atexit.register(_release_lock)
+
+
 # Battery State Estimator — Physics Engine startup
 # Thread starts at module level so it works under gunicorn AND direct execution.
-# _start_sim_thread() is idempotent: the flag prevents double-start if Flask
-# debug-reloader spawns a second process.
+# _start_sim_thread() checks lock file to ensure only one worker runs the thread.
 _sim_thread_started = False
 
 def _start_sim_thread():
     global _sim_thread_started
     if not _sim_thread_started:
-        _sim_thread_started = True
-        t = threading.Thread(target=generator_loop, daemon=True)
-        t.start()
-        print("Battery State Estimator — Physics Engine thread active.")
+        if _acquire_lock():
+            _sim_thread_started = True
+            t = threading.Thread(target=generator_loop, daemon=True)
+            t.start()
+            print(f"Battery State Estimator — Physics Engine thread active (PID: {os.getpid()}).")
+        else:
+            print(f"Battery State Estimator — Simulation lock held by another process. Thread not started (PID: {os.getpid()}).")
 
 _start_sim_thread()
 

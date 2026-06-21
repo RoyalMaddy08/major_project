@@ -4,6 +4,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // UI Elements
     const mismatchSelect = document.getElementById('mismatch-select');
     const quantizeSelect = document.getElementById('quantize-select');
+
+    // Simulator Control Center Elements
+    const btnStart = document.getElementById('btn-start');
+    const btnPause = document.getElementById('btn-pause');
+    const btnStop = document.getElementById('btn-stop');
+    const btnReset = document.getElementById('btn-reset');
+
+    const chemSelect = document.getElementById('chem-select');
+    const cycleSelect = document.getElementById('cycle-select');
+    const agingToggle = document.getElementById('aging-toggle');
+    const tempSlider = document.getElementById('temp-slider');
+    const valAmbientTemp = document.getElementById('val-ambient-temp');
+
+    const faultShortToggle = document.getElementById('fault-short-toggle');
+    const faultThermalToggle = document.getElementById('fault-thermal-toggle');
+    const faultDropoutToggle = document.getElementById('fault-dropout-toggle');
     
     const simBadge = document.getElementById('sim-status-badge');
     const simPortBadge = document.getElementById('sim-port-badge');
@@ -45,8 +61,131 @@ document.addEventListener('DOMContentLoaded', () => {
     const alarmShort = document.getElementById('alarm-short');
     const alarmThermal = document.getElementById('alarm-thermal');
 
+    const valEkfSocError = document.getElementById('val-ekf-soc-error');
+    const valEsnSocError = document.getElementById('val-esn-soc-error');
+    const valEkfSohError = document.getElementById('val-ekf-soh-error');
+    const valEsnSohError = document.getElementById('val-esn-soh-error');
+
     // Chart Handles
     let chartSOC, chartSOH;
+
+    // Telemetry History and Inspection States
+    let telemetryHistory = [];
+    let isLocked = false;
+    let lockedIndex = -1;
+    let isScrubbing = false;
+    let scrubbedIndex = -1;
+
+    // Configuration Settings
+    let graphSliceLimit = 120;
+
+    // Badge Elements
+    const readoutModeBadge = document.getElementById('readout-mode-badge');
+    const readoutModeLabel = document.getElementById('readout-mode-label');
+    const btnResumeLive = document.getElementById('btn-resume-live');
+
+    function updateBadge() {
+        if (!readoutModeBadge || !readoutModeLabel) return;
+        
+        if (isLocked && lockedIndex !== -1 && telemetryHistory[lockedIndex]) {
+            const t = Math.round(telemetryHistory[lockedIndex].time);
+            readoutModeLabel.textContent = `Historical: Locked (t = ${t}s)`;
+            readoutModeBadge.style.display = 'flex';
+            readoutModeBadge.style.background = 'var(--accent-blue-lt)';
+            readoutModeBadge.style.borderColor = 'rgba(29, 78, 216, 0.4)';
+            if (btnResumeLive) btnResumeLive.style.display = 'inline-block';
+        } else if (isScrubbing && scrubbedIndex !== -1 && telemetryHistory[scrubbedIndex]) {
+            const t = Math.round(telemetryHistory[scrubbedIndex].time);
+            readoutModeLabel.textContent = `Historical: Scrubbing (t = ${t}s)`;
+            readoutModeBadge.style.display = 'flex';
+            readoutModeBadge.style.background = 'rgba(241, 245, 249, 0.9)';
+            readoutModeBadge.style.borderColor = 'var(--border-light)';
+            if (btnResumeLive) btnResumeLive.style.display = 'inline-block';
+        } else {
+            readoutModeBadge.style.display = 'none';
+        }
+    }
+
+    function handleChartHover(index, chart) {
+        const graphDataLength = Math.min(telemetryHistory.length, graphSliceLimit);
+        const actualIndex = telemetryHistory.length - graphDataLength + index;
+
+        if (actualIndex < 0 || actualIndex >= telemetryHistory.length) return;
+        isScrubbing = true;
+        scrubbedIndex = actualIndex;
+        
+        const otherChart = (chart === chartSOC) ? chartSOH : chartSOC;
+        if (otherChart && otherChart.data && otherChart.data.datasets && otherChart.data.datasets.length > 0 && otherChart.data.datasets[0].data) {
+            const otherDataLength = otherChart.data.datasets[0].data.length;
+            if (index >= 0 && index < otherDataLength) {
+                const activeElements = otherChart.data.datasets.map((ds, dsIdx) => ({
+                    datasetIndex: dsIdx,
+                    index: index
+                }));
+                otherChart.setActiveElements(activeElements);
+                otherChart.update();
+            }
+        }
+
+        updateNumericalReadouts(telemetryHistory[actualIndex]);
+        updateBadge();
+    }
+
+    function handleChartHoverEnd(chart) {
+        isScrubbing = false;
+        scrubbedIndex = -1;
+
+        const otherChart = (chart === chartSOC) ? chartSOH : chartSOC;
+        if (otherChart && otherChart.data && otherChart.data.datasets && otherChart.data.datasets.length > 0) {
+            otherChart.setActiveElements([]);
+            otherChart.update();
+        }
+
+        if (isLocked && lockedIndex !== -1) {
+            updateNumericalReadouts(telemetryHistory[lockedIndex]);
+        } else if (telemetryHistory.length > 0) {
+            updateNumericalReadouts(telemetryHistory[telemetryHistory.length - 1]);
+        }
+        updateBadge();
+    }
+
+    function handleChartClick(index) {
+        const graphDataLength = Math.min(telemetryHistory.length, graphSliceLimit);
+        const actualIndex = telemetryHistory.length - graphDataLength + index;
+
+        if (actualIndex < 0 || actualIndex >= telemetryHistory.length) return;
+        isLocked = true;
+        lockedIndex = actualIndex;
+        updateNumericalReadouts(telemetryHistory[actualIndex]);
+        updateBadge();
+    }
+
+    function handleChartClickOutside() {
+        resumeLiveMode();
+    }
+
+    function resumeLiveMode() {
+        isLocked = false;
+        lockedIndex = -1;
+        isScrubbing = false;
+        scrubbedIndex = -1;
+        
+        if (chartSOC && chartSOC.data && chartSOC.data.datasets && chartSOC.data.datasets.length > 0) {
+            chartSOC.setActiveElements([]);
+            chartSOC.update();
+        }
+        if (chartSOH && chartSOH.data && chartSOH.data.datasets && chartSOH.data.datasets.length > 0) {
+            chartSOH.setActiveElements([]);
+            chartSOH.update();
+        }
+
+        if (telemetryHistory.length > 0) {
+            updateNumericalReadouts(telemetryHistory[telemetryHistory.length - 1]);
+        } else {
+            updateNumericalReadouts(null);
+        }
+        updateBadge();
+    }
 
     // Charts Configuration Options — Premium Light Mode
     const CHART_COLORS = {
@@ -74,6 +213,29 @@ document.addEventListener('DOMContentLoaded', () => {
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 0 },
+        interaction: {
+            mode: 'index',
+            intersect: false
+        },
+        onHover: (event, activeElements, chart) => {
+            if (chart && chart.canvas) {
+                chart.canvas.style.cursor = (activeElements && activeElements.length > 0) ? 'pointer' : 'default';
+            }
+            if (activeElements && activeElements.length > 0) {
+                const index = activeElements[0].index;
+                handleChartHover(index, chart);
+            } else {
+                handleChartHoverEnd(chart);
+            }
+        },
+        onClick: (event, activeElements, chart) => {
+            if (activeElements && activeElements.length > 0) {
+                const index = activeElements[0].index;
+                handleChartClick(index);
+            } else {
+                handleChartClickOutside();
+            }
+        },
         plugins: {
             legend: {
                 display: true,
@@ -123,7 +285,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         backgroundColor: gradientSOC,
                         borderWidth: 2.5,
                         fill: true,
-                        pointRadius: 0,
+                        pointRadius: 2.5,
+                        pointHoverRadius: 6,
+                        pointHitRadius: 10,
                         tension: 0.3
                     },
                     {
@@ -133,7 +297,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         borderWidth: 1.8,
                         borderDash: [4, 4],
                         fill: false,
-                        pointRadius: 0,
+                        pointRadius: 2.5,
+                        pointHoverRadius: 6,
+                        pointHitRadius: 10,
                         tension: 0.3
                     },
                     {
@@ -142,7 +308,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         borderColor: CHART_COLORS.blue,
                         borderWidth: 1.8,
                         fill: false,
-                        pointRadius: 0,
+                        pointRadius: 2.5,
+                        pointHoverRadius: 6,
+                        pointHitRadius: 10,
                         tension: 0.3
                     }
                 ]
@@ -175,7 +343,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         backgroundColor: gradientSOH,
                         borderWidth: 2.5,
                         fill: true,
-                        pointRadius: 0,
+                        pointRadius: 2.5,
+                        pointHoverRadius: 6,
+                        pointHitRadius: 10,
                         tension: 0.3
                     },
                     {
@@ -185,7 +355,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         borderWidth: 1.8,
                         borderDash: [4, 4],
                         fill: false,
-                        pointRadius: 0,
+                        pointRadius: 2.5,
+                        pointHoverRadius: 6,
+                        pointHitRadius: 10,
                         tension: 0.3
                     },
                     {
@@ -194,7 +366,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         borderColor: CHART_COLORS.violet,
                         borderWidth: 1.8,
                         fill: false,
-                        pointRadius: 0,
+                        pointRadius: 2.5,
+                        pointHoverRadius: 6,
+                        pointHitRadius: 10,
                         tension: 0.3
                     }
                 ]
@@ -211,6 +385,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         });
+
+
     }
 
     // Server API calls helper
@@ -253,6 +429,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function refreshStatus() {
         const status = await apiRequest('/api/status');
         if (!status) return;
+
+        if (status.graph_slice_limit !== undefined) {
+            graphSliceLimit = status.graph_slice_limit;
+        }
 
         mismatchSelect.value = status.ekf_mismatch !== undefined ? Number(status.ekf_mismatch).toFixed(1) : "1.0";
         quantizeSelect.value = status.quantize_mode || "float32";
@@ -318,96 +498,23 @@ document.addEventListener('DOMContentLoaded', () => {
             chemBadgeLabel.textContent = 'Chemistry: ' + chemName;
         }
 
-        // Update Simulator State Reference Card in Sidebar
-        const valSimRunning = document.getElementById('val-sim-running');
-        const valSimChemistry = document.getElementById('val-sim-chemistry');
-        const valSimCycle = document.getElementById('val-sim-cycle');
-        const valSimAmbient = document.getElementById('val-sim-ambient');
-        const valSimAging = document.getElementById('val-sim-aging');
+        // Update Simulator Control Center states
+        if (btnStart) btnStart.disabled = status.sim_running;
+        if (btnPause) btnPause.disabled = !status.sim_running;
+        if (btnStop) btnStop.disabled = !status.sim_running;
 
-        const injShort = document.getElementById('status-injected-short');
-        const injThermal = document.getElementById('status-injected-thermal');
-        const injDropout = document.getElementById('status-injected-dropout');
+        if (chemSelect) chemSelect.value = status.chemistry;
+        if (cycleSelect) cycleSelect.value = status.active_cycle;
+        if (agingToggle) agingToggle.checked = status.accelerated_aging;
 
-        if (valSimRunning) {
-            if (status.sim_running) {
-                valSimRunning.textContent = 'Active';
-                valSimRunning.style.color = '#10b981';
-            } else {
-                valSimRunning.textContent = 'Idle';
-                valSimRunning.style.color = '#ef4444';
-            }
+        if (tempSlider && document.activeElement !== tempSlider) {
+            tempSlider.value = status.T_ambient;
+            if (valAmbientTemp) valAmbientTemp.textContent = status.T_ambient;
         }
 
-        if (valSimChemistry) {
-            const chemMap = {
-                'li_ion': 'Generic Li-ion',
-                'nmc': 'Li-ion NMC',
-                'lfp': 'LiFePO₄ LFP',
-                'lead_acid': 'Lead-Acid'
-            };
-            valSimChemistry.textContent = chemMap[status.chemistry] || status.chemistry.toUpperCase();
-        }
-
-        if (valSimCycle) {
-            const cycleMap = {
-                'udds': 'UDDS Cycle',
-                'hwfet': 'HWFET Cycle',
-                'us06': 'US06 Cycle',
-                'constant': 'Constant (-1C)',
-                'charge': 'CC-CV Charge'
-            };
-            valSimCycle.textContent = cycleMap[status.active_cycle] || status.active_cycle.toUpperCase();
-        }
-
-        if (valSimAmbient && status.T_ambient !== undefined) {
-            valSimAmbient.textContent = status.T_ambient.toFixed(1) + ' °C';
-        }
-
-        if (valSimAging) {
-            if (status.accelerated_aging) {
-                valSimAging.textContent = 'ON (x1500)';
-                valSimAging.style.color = '#b45309';
-            } else {
-                valSimAging.textContent = 'OFF';
-                valSimAging.style.color = 'var(--text-muted)';
-            }
-        }
-
-        // Active Injected Fault indicators
-        if (injShort) {
-            if (status.fault_short) {
-                injShort.style.color = '#be123c';
-                injShort.style.fontWeight = '600';
-                injShort.querySelector('i').style.color = '#be123c';
-            } else {
-                injShort.style.color = 'var(--text-muted)';
-                injShort.style.fontWeight = 'normal';
-                injShort.querySelector('i').style.color = 'var(--text-muted)';
-            }
-        }
-        if (injThermal) {
-            if (status.fault_thermal) {
-                injThermal.style.color = '#be123c';
-                injThermal.style.fontWeight = '600';
-                injThermal.querySelector('i').style.color = '#be123c';
-            } else {
-                injThermal.style.color = 'var(--text-muted)';
-                injThermal.style.fontWeight = 'normal';
-                injThermal.querySelector('i').style.color = 'var(--text-muted)';
-            }
-        }
-        if (injDropout) {
-            if (status.fault_dropout) {
-                injDropout.style.color = '#be123c';
-                injDropout.style.fontWeight = '600';
-                injDropout.querySelector('i').style.color = '#be123c';
-            } else {
-                injDropout.style.color = 'var(--text-muted)';
-                injDropout.style.fontWeight = 'normal';
-                injDropout.querySelector('i').style.color = 'var(--text-muted)';
-            }
-        }
+        if (faultShortToggle) faultShortToggle.checked = status.fault_short;
+        if (faultThermalToggle) faultThermalToggle.checked = status.fault_thermal;
+        if (faultDropoutToggle) faultDropoutToggle.checked = status.fault_dropout;
 
         // Update loaded ESN model registry RMSE details in Sidebar
         const valModelSocRmse = document.getElementById('val-model-soc-rmse');
@@ -418,18 +525,80 @@ document.addEventListener('DOMContentLoaded', () => {
         if (valModelSohRmse) {
             valModelSohRmse.textContent = (status.soh_rmse !== null && status.soh_rmse !== undefined) ? status.soh_rmse.toFixed(6) : '--';
         }
+
+        // Update Sidebar elements with live status values
+        const valSimPort = document.getElementById('val-sim-port');
+        const valSimRunning = document.getElementById('val-sim-running');
+        const valSimChemistry = document.getElementById('val-sim-chemistry');
+        const valSimCycle = document.getElementById('val-sim-cycle');
+        const valSimAmbient = document.getElementById('val-sim-ambient');
+        const valSimAging = document.getElementById('val-sim-aging');
+
+        const statusInjectedShort = document.getElementById('status-injected-short');
+        const statusInjectedThermal = document.getElementById('status-injected-thermal');
+        const statusInjectedDropout = document.getElementById('status-injected-dropout');
+
+        if (valSimPort) {
+            if (status.simulator_port_online) {
+                valSimPort.textContent = 'Online';
+                valSimPort.className = 'font-blue';
+            } else {
+                valSimPort.textContent = 'Offline';
+                valSimPort.className = 'text-rose';
+            }
+        }
+
+        if (valSimRunning) {
+            if (status.sim_running) {
+                valSimRunning.textContent = 'Running';
+                valSimRunning.className = 'font-blue';
+            } else {
+                valSimRunning.textContent = 'Idle';
+                valSimRunning.className = 'text-rose';
+            }
+        }
+
+        if (valSimChemistry && status.chemistry) {
+            const chemMap = {
+                'li_ion': 'Generic Li-ion',
+                'nmc': 'Li-ion NMC',
+                'lfp': 'LiFePO₄ LFP',
+                'lead_acid': 'Lead-Acid'
+            };
+            const chemName = chemMap[status.chemistry] || status.chemistry.toUpperCase();
+            valSimChemistry.textContent = chemName;
+        }
+
+        if (valSimCycle && status.active_cycle) {
+            valSimCycle.textContent = status.active_cycle.toUpperCase();
+        }
+
+        if (valSimAmbient && status.T_ambient !== undefined) {
+            valSimAmbient.textContent = status.T_ambient.toFixed(1) + '°C';
+        }
+
+        if (valSimAging) {
+            valSimAging.textContent = status.accelerated_aging ? 'Active' : 'Off';
+            valSimAging.className = status.accelerated_aging ? 'font-blue' : '';
+        }
+
+        if (statusInjectedShort) {
+            statusInjectedShort.style.color = status.fault_short ? 'var(--accent-rose)' : 'var(--text-muted)';
+            statusInjectedShort.style.fontWeight = status.fault_short ? '600' : 'normal';
+        }
+        if (statusInjectedThermal) {
+            statusInjectedThermal.style.color = status.fault_thermal ? 'var(--accent-rose)' : 'var(--text-muted)';
+            statusInjectedThermal.style.fontWeight = status.fault_thermal ? '600' : 'normal';
+        }
+        if (statusInjectedDropout) {
+            statusInjectedDropout.style.color = status.fault_dropout ? 'var(--accent-rose)' : 'var(--text-muted)';
+            statusInjectedDropout.style.fontWeight = status.fault_dropout ? '600' : 'normal';
+        }
     }
 
-    // Refresh telemetry and plot data
-    async function refreshTelemetry() {
-        const telemetry = await apiRequest('/api/telemetry');
-        if (!telemetry || !telemetry.data) return;
-
-        const data = telemetry.data;
-        
-        // Update numerical readouts with latest values
-        if (data.length > 0) {
-            const latest = data[data.length - 1];
+    // Helper to render numerical readouts
+    function updateNumericalReadouts(latest) {
+        if (latest) {
             valVoltage.textContent = latest.voltage.toFixed(2);
             valCurrent.textContent = latest.current.toFixed(2);
             valTemp.textContent = latest.temperature.toFixed(1);
@@ -439,6 +608,19 @@ document.addEventListener('DOMContentLoaded', () => {
             valEsnSoc.textContent = (latest.esn_soc * 100.0).toFixed(1) + '%';
             valEkfSoh.textContent = (latest.ekf_soh * 100.0).toFixed(1) + '%';
             valEsnSoh.textContent = (latest.esn_soh * 100.0).toFixed(1) + '%';
+
+            // Compute absolute errors
+            const trueSoc = latest.true_soc !== undefined ? latest.true_soc : latest.cc_soc;
+            const trueSoh = latest.true_soh !== undefined ? latest.true_soh : latest.trad_soh;
+            const ekfSocErr = Math.abs(trueSoc - latest.ekf_soc);
+            const esnSocErr = Math.abs(trueSoc - latest.esn_soc);
+            const ekfSohErr = Math.abs(trueSoh - latest.ekf_soh);
+            const esnSohErr = Math.abs(trueSoh - latest.esn_soh);
+
+            if (valEkfSocError) valEkfSocError.textContent = (ekfSocErr * 100.0).toFixed(2) + '%';
+            if (valEsnSocError) valEsnSocError.textContent = (esnSocErr * 100.0).toFixed(2) + '%';
+            if (valEkfSohError) valEkfSohError.textContent = (ekfSohErr * 100.0).toFixed(2) + '%';
+            if (valEsnSohError) valEsnSohError.textContent = (esnSohErr * 100.0).toFixed(2) + '%';
 
             // Update Advanced Estimations values
             if (valEkfSoe) valEkfSoe.textContent = (latest.ekf_soe * 100.0).toFixed(1);
@@ -523,6 +705,11 @@ document.addEventListener('DOMContentLoaded', () => {
             valEkfSoh.textContent = '--%';
             valEsnSoh.textContent = '--%';
 
+            if (valEkfSocError) valEkfSocError.textContent = '--%';
+            if (valEsnSocError) valEsnSocError.textContent = '--%';
+            if (valEkfSohError) valEkfSohError.textContent = '--%';
+            if (valEsnSohError) valEsnSohError.textContent = '--%';
+
             if (valEkfSoe) valEkfSoe.textContent = '--';
             if (valEsnSoe) valEsnSoe.textContent = '--%';
             if (valEnergyRem) valEnergyRem.textContent = '-- Wh';
@@ -549,15 +736,66 @@ document.addEventListener('DOMContentLoaded', () => {
                     'System Status: Nominal', 'All estimators running normally. No active fault anomalies.');
             }
         }
+    }
+
+    // Refresh telemetry and plot data
+    async function refreshTelemetry() {
+        const telemetry = await apiRequest('/api/telemetry');
+        if (!telemetry || !telemetry.data) return;
+
+        telemetryHistory = telemetry.data;
+        const data = telemetryHistory;
+        
+        // Handle database reset or truncation safety
+        if (data.length === 0) {
+            isLocked = false;
+            lockedIndex = -1;
+            isScrubbing = false;
+            scrubbedIndex = -1;
+            updateBadge();
+        } else if (isLocked && lockedIndex >= data.length) {
+            isLocked = false;
+            lockedIndex = -1;
+            updateBadge();
+        }
+        
+        // Update numerical readouts only if we are in Live Mode (not locked, not scrubbing)
+        if (!isLocked && !isScrubbing) {
+            if (data.length > 0) {
+                updateNumericalReadouts(data[data.length - 1]);
+            } else {
+                updateNumericalReadouts(null);
+            }
+        }
+
+        // Limit the graphs to the latest rolling slice to avoid clutter
+        const graphData = data.slice(-graphSliceLimit);
+
+        // Scale X-axis bounds to cover the full graph width
+        if (graphData.length > 0) {
+            const minTime = graphData[0].time;
+            const maxTime = graphData[graphData.length - 1].time;
+            
+            chartSOC.options.scales.x.min = minTime;
+            chartSOC.options.scales.x.max = maxTime;
+            
+            chartSOH.options.scales.x.min = minTime;
+            chartSOH.options.scales.x.max = maxTime;
+        } else {
+            delete chartSOC.options.scales.x.min;
+            delete chartSOC.options.scales.x.max;
+            delete chartSOH.options.scales.x.min;
+            delete chartSOH.options.scales.x.max;
+        }
 
         // Map data arrays for graphs
-        const socTrueData = data.map(r => ({ x: r.time, y: r.true_soc !== undefined ? r.true_soc : r.cc_soc }));
-        const socEkfData = data.map(r => ({ x: r.time, y: r.ekf_soc }));
-        const socEsnData = data.map(r => ({ x: r.time, y: r.esn_soc }));
+        const socTrueData = graphData.map(r => ({ x: r.time, y: r.true_soc !== undefined ? r.true_soc : r.cc_soc }));
+        const socEkfData = graphData.map(r => ({ x: r.time, y: r.ekf_soc }));
+        const socEsnData = graphData.map(r => ({ x: r.time, y: r.esn_soc }));
         
-        const sohTrueData = data.map(r => ({ x: r.time, y: r.true_soh !== undefined ? r.true_soh : r.trad_soh }));
-        const sohEkfData = data.map(r => ({ x: r.time, y: r.ekf_soh }));
-        const sohEsnData = data.map(r => ({ x: r.time, y: r.esn_soh }));
+        const sohTrueData = graphData.map(r => ({ x: r.time, y: r.true_soh !== undefined ? r.true_soh : r.trad_soh }));
+        const sohEkfData = graphData.map(r => ({ x: r.time, y: r.ekf_soh }));
+        const sohEsnData = graphData.map(r => ({ x: r.time, y: r.esn_soh }));
 
         // Update graph datasets
         chartSOC.data.datasets[0].data = socTrueData;
@@ -571,17 +809,127 @@ document.addEventListener('DOMContentLoaded', () => {
         chartSOH.update();
     }
 
+    if (btnResumeLive) {
+        btnResumeLive.addEventListener('click', (e) => {
+            e.stopPropagation();
+            resumeLiveMode();
+        });
+    }
+
     mismatchSelect.addEventListener('change', async (e) => {
+        resumeLiveMode();
         await apiRequest('/api/control', 'POST', { ekf_mismatch: parseFloat(e.target.value) });
         refreshStatus();
         refreshTelemetry();
     });
 
     quantizeSelect.addEventListener('change', async (e) => {
+        resumeLiveMode();
         await apiRequest('/api/control', 'POST', { quantize_mode: e.target.value });
         refreshStatus();
         refreshTelemetry();
     });
+
+    // Playback control button listeners
+    if (btnStart) {
+        btnStart.addEventListener('click', async () => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { command: 'start' });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (btnPause) {
+        btnPause.addEventListener('click', async () => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { command: 'pause' });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (btnStop) {
+        btnStop.addEventListener('click', async () => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { command: 'stop' });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (btnReset) {
+        btnReset.addEventListener('click', async () => {
+            if (confirm('Reset simulator and purge all historical database records?')) {
+                resumeLiveMode();
+                await apiRequest('/api/control', 'POST', { command: 'reset' });
+                refreshStatus();
+                refreshTelemetry();
+            }
+        });
+    }
+
+    // Config selects & toggle listeners
+    if (chemSelect) {
+        chemSelect.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { chemistry: e.target.value });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (cycleSelect) {
+        cycleSelect.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { cycle_type: e.target.value });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (agingToggle) {
+        agingToggle.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { accelerated_aging: e.target.checked });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+
+    // Environment & fault toggle listeners
+    if (tempSlider) {
+        tempSlider.addEventListener('input', (e) => {
+            if (valAmbientTemp) valAmbientTemp.textContent = e.target.value;
+        });
+        tempSlider.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { T_ambient: parseFloat(e.target.value) });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (faultShortToggle) {
+        faultShortToggle.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { fault_short: e.target.checked });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (faultThermalToggle) {
+        faultThermalToggle.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { fault_thermal: e.target.checked });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+    if (faultDropoutToggle) {
+        faultDropoutToggle.addEventListener('change', async (e) => {
+            resumeLiveMode();
+            await apiRequest('/api/control', 'POST', { fault_dropout: e.target.checked });
+            refreshStatus();
+            refreshTelemetry();
+        });
+    }
+
+
 
     // ──────────────── ESN Model Retraining Bindings ────────────────
     const btnRetrain = document.getElementById('btn-retrain');

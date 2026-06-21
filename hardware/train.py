@@ -1,3 +1,4 @@
+import numpy as np
 
 class EchoStateNetwork:
     def __init__(self, n_inputs, n_reservoir, n_outputs, spectral_radius=0.95, leak_rate=0.3, input_scaling=1.0, ridge_param=1e-4, sparsity=0.85):

@@ -44,6 +44,9 @@ class Config:
     # Maximum readings returned per /api/telemetry call (prevents large browser payloads)
     TELEMETRY_RESPONSE_LIMIT = int(os.environ.get("TELEMETRY_RESPONSE_LIMIT", 150))
 
+    # Rolling points limit for dashboard graph visualization
+    GRAPH_SLICE_LIMIT = int(os.environ.get("GRAPH_SLICE_LIMIT", 120))
+
     # Maximum in-memory fallback list size when MongoDB is offline
     TELEMETRY_FALLBACK_LIMIT = int(os.environ.get("TELEMETRY_FALLBACK_LIMIT", 1000))
 

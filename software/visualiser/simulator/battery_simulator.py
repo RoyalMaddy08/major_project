@@ -136,7 +136,7 @@ class BatterySimulator:
         terminal_voltage = ocv + (current_internal * R0) + self.V1 + self.V2
         
         # Clip terminal voltage based on chemistry cell counts
-        n_cells = 6 if self.chemistry_name == "lead_acid" else 3
+        n_cells = self.chemistry.n_cells
         min_v = 1.5 * n_cells
         max_v = 4.5 * n_cells
         terminal_voltage = np.clip(terminal_voltage, min_v, max_v)
