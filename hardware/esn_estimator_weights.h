@@ -1,7 +1,7 @@
 #ifndef ESN_ESTIMATOR_WEIGHTS_H
 #define ESN_ESTIMATOR_WEIGHTS_H
 
-// Auto-generated weights file from model_rc.pkl
+// Auto-generated weights file for STM32 ESN estimators
 
 #define ESN_N_INPUTS 4
 #define ESN_SOC_N_RESERVOIR 300

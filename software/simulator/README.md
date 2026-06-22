@@ -21,15 +21,23 @@ The simulator is located in the `software/simulator` folder:
 
 ```
 simulator/
+├── .env (Local environment configurations - MongoDB, debug flags, server ports)
+├── .env.example (Template for setting up environment variables)
+├── .gitignore (Excludes pycache, env, and local build files)
+├── README.md (Comprehensive documentation of the battery physics simulation server)
 ├── app.py (Flask API web server and background simulation pacing thread)
-├── run_simulator.py (Legacy entry point; redirects to app.py)
 ├── config.py (Private database, server, timing, noise, and fault configurations)
-├── requirements.txt (Dependencies for Flask, MongoDB, and NumPy)
+├── requirements.txt (Dependencies for Flask, pymongo, and NumPy)
 ├── battery_simulator.py (Core BatterySimulator physics model and DriveCycles)
 ├── battery_chemistry.py (BatteryChemistry profiles and OCV lookup tables)
 ├── traditional_estimator.py (Physics-based EKF and SOH tracker)
 ├── estimator_pipeline.py (Telemetry runner with safety overrides and state sync)
 ├── static/
+│   ├── css/
+│   │   └── style.css (Premium light-mode glassmorphism styling)
+│   ├── images/
+│   │   ├── favicon.ico (BMS icon favicon)
+│   │   └── logo.png (Brand identity logo)
 │   └── js/
 │       └── generator.js (Developer simulation dashboard javascript controller)
 └── templates/

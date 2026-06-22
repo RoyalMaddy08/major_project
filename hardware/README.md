@@ -1,91 +1,150 @@
-# STM32 Edge Battery State Classifier (Hardware Component)
+# STM32 Edge Battery State Evaluator & Classifier (Hardware Component)
 
-This directory contains the embedded C firmware, offline Python training pipelines, and data generation assets to run a real-time, optimized **Echo State Network (ESN)** state classifier on an edge STM32 microcontroller (ARM Cortex-M core).
-
----
-
-## 📂 Hardware Directory File Guide
-
-* **[main.c](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/main.c)**: STM32 microcontroller firmware entry point. It runs the ESN inference loop on static test telemetry data, outputs classifications (Normal/Warning/Critical) over USART, and switches warning LEDs.
-* **[train_classifier.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/train_classifier.py)**: Offline Python training script that loads raw EV drive cycle data, trains the ESN readout matrix, converts the sparse reservoir to **Compressed Sparse Row (CSR)** arrays, and outputs the C header `esn_classifier_weights.h`.
-* **[export_weights.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/export_weights.py)**: Helper script to export the trained dashboard visualizer weights (`model_rc.pkl`) into C header formats (`esn_estimator_weights.h`) for microcontroller porting.
-* **[train.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/train.py)**: Core Python class implementing the sparse reservoir computing initialization, Ridge Regression fitting, and quantization simulation.
-* **[data_set.m](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/data_set.m)**: MATLAB script that models simple EV cell voltage, current, and thermal convective dynamics to generate synthetic battery dataset files.
-* **[original_ev_battery_dataset_multiclass.csv](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/original_ev_battery_dataset_multiclass.csv)**: Pre-generated synthetic EV dataset containing time-series columns for Voltage, Current, Temperature, and multiclass state labels.
+A highly optimized cyber-physical edge computing subsystem designed to run real-time battery diagnostics directly on low-power microcontrollers (ARM Cortex-M core). This folder contains the offline Python training scripts, feature engineering pipelines, math models, and embedded C firmware executing an optimized **Echo State Network (ESN)**.
 
 ---
 
-## 🧮 Embedded ESN Architecture & Dynamics
+## 📂 Hardware Component Overview
 
-The firmware implements a recurrent reservoir state update followed by a linear readout classification:
+The hardware component is structured as follows:
 
-### 1. Feature Normalization
-Input features `[Voltage, Current, Temperature]` ($u$) are scaled using pre-calculated training dataset averages to handle variations in magnitude:
-$$u_{\text{scaled}, i} = \frac{u_i - \text{means}_i}{\text{stds}_i}$$
+| File / Directory | Description |
+| :--- | :--- |
+| **[main.c](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/main.c)** | Firmware entry point for STM32. Executes sparse reservoir computing inference in real-time, processes telemetry arrays, drives GPIO notification status (`PA5` LED), and outputs serial diagnostic streams. |
+| **[train.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/train.py)** | Core ESN model class implementing recurrent reservoir dynamics, Ridge Regression readout fitting, and fixed-point quantization simulations (`float32`, `int16`, `int8`). |
+| **[train_classifier.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/train_classifier.py)** | Offline pipeline to train the 3-state ESN battery classifier. Scales inputs, generates CSR (Compressed Sparse Row) arrays, and writes `esn_classifier_weights.h`. |
+| **[train_estimator.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/train_estimator.py)** | Offline script to train dual ESN estimators: SOC Estimator (300 reservoir nodes) and SOH Estimator (200 reservoir nodes). Performs feature engineering and writes dense weights to `esn_estimator_weights.h`. |
+| **[export_weights.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/export_weights.py)** | Duplicate/helper pipeline identical to `train_estimator.py` that trains SOC/SOH estimators and exports weights to the C header structure. |
+| **[config.py](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/config.py)** | Environment-driven centralized pipeline configurations (hyperparameters, database configurations, dataset locations, classification thresholds). |
+| **[esn_classifier_weights.h](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/esn_classifier_weights.h)** | Auto-generated C header representing the 3-state classifier ESN parameters (normalization coefficients, input/readout weights, CSR reservoir representation). |
+| **[esn_estimator_weights.h](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/esn_estimator_weights.h)** | Auto-generated C header representing dense ESN estimators for State of Charge (SOC) and State of Health (SOH) tracking. |
+| **[original_ev_battery_dataset_multiclass.csv](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/original_ev_battery_dataset_multiclass.csv)** | Raw time-series dataset containing simulated electric vehicle (EV) battery parameters (Voltage, Current, Temperature, SOC, SOH). |
+| **[.env](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/.env)** / **[.env.example](file:///d:/_Deployed_Projects_Vercel/major_project/hardware/.env.example)** | Placeholders for overriding ESN structural dimensions and training constraints dynamically. |
 
-### 2. Sparse Reservoir Update
-Project normalized features into a 50-node recurrent state reservoir ($x$). The state transition equation at tick $t$ is:
+---
+
+## 🧮 Embedded Echo State Network (ESN) Dynamics
+
+The ESN architecture leverages a high-dimensional recurrent reservoir to map non-linear battery transients into a linearly separable space.
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │            ESN Reservoir (x_t)               │
+                    │   - Recurrent connection matrix W_res       │
+                    │   - Leak Rate (α = 0.3)                      │
+                    └──────────────────────┬───────────────────────┘
+                                           │
+  ┌──────────────────────┐                 ▼                 ┌──────────────────────┐
+  │ Inputs (u_t)         ├─────────────────┼────────────────►│ Linear Readout W_out │
+  │ - Voltage            │                 │                 │                      │
+  │ - Current            │                 ▼                 │ - Argmax Decision    │
+  │ - Temperature        ├──────────────────────────────────►│   (Normal/Warning/   │
+  └──────────────────────┘                                   │    Critical)         │
+                                                             └──────────┬───────────┘
+                                                                        │
+                                                                        ▼
+                                                             ┌──────────────────────┐
+                                                             │ GPIO Control (PA5)   │
+                                                             └──────────────────────┘
+```
+
+The system executes the following mathematical update pipeline at each tick $t$:
+
+### 1. Z-Score Feature Scaling
+To balance input features with varying orders of magnitude (e.g., current transients vs. thermal dynamics), features $u_t$ are normalized using pre-calculated training dataset means ($\mu$) and standard deviations ($\sigma$):
+$$u_{\text{scaled}, i} = \frac{u_t[i] - \mu_i}{\sigma_i}$$
+
+### 2. Recurrent Reservoir Update
+The reservoir vector $x_t \in \mathbb{R}^{50}$ tracks temporal dependencies of the battery states (leakage rate $\alpha = 0.3$):
 $$\tilde{x}_t = \tanh\left(\mathbf{W}_{\text{in}} [1; u_{\text{scaled}}] + \mathbf{W}_{\text{res}} x_{t-1}\right)$$
 $$x_t = (1 - \alpha) x_{t-1} + \alpha \tilde{x}_t$$
-Where:
-* $\alpha$ is the leak rate (configured to `0.3`).
-* $[1; u_{\text{scaled}}]$ is the input vector with a bias term.
-* $\mathbf{W}_{\text{res}}$ is the sparse recurrent weight matrix ($50 \times 50$, initialized with $85\%$ sparsity).
 
-### 3. Readout Classification
-Compute output classes $y$ using the trained linear readout matrix:
+* $[1; u_{\text{scaled}}]$ represents the input features concatenated with a constant bias.
+* $\mathbf{W}_{\text{in}} \in \mathbb{R}^{50 \times 4}$ maps inputs into the reservoir.
+* $\mathbf{W}_{\text{res}} \in \mathbb{R}^{50 \times 50}$ controls internal recurrent reservoir loops (initialized with $85\%$ sparsity).
+
+### 3. Readout & Decision Boundary
+The output $y_t \in \mathbb{R}^3$ computes the raw activation values for the three battery states:
 $$y_t = \mathbf{W}_{\text{out}} [1; u_{\text{scaled}}; x_t]$$
-The final predicted state (Normal, Warning, or Critical) is determined via:
 $$\text{state} = \operatorname{argmax}(y_{t, 0}, y_{t, 1}, y_{t, 2})$$
 
+Predicted states correspond to:
+* **0 (NORMAL)**: Temperature $< 35^{\circ}\text{C}$
+* **1 (WARNING)**: Temperature $35^{\circ}\text{C} \le \text{Temp} < 45^{\circ}\text{C}$
+* **2 (CRITICAL)**: Temperature $\ge 45^{\circ}\text{C}$
+
 ---
 
-## ⚡ Embedded Optimizations
+## ⚡ Hardware Optimizations & Memory Footprint
+
+To ensure smooth real-time execution on low-cost ARM Cortex-M microcontrollers, the firmware implements key mathematical optimizations:
 
 ### 1. Compressed Sparse Row (CSR) SpMV
-Because the reservoir weight matrix $\mathbf{W}_{\text{res}}$ is $85\%$ sparse, the standard matrix-vector multiplication is optimized into a Compressed Sparse Row (CSR) format:
-* Only the **non-zero elements** are stored in Flash memory (`esn_W_res_val`).
-* Columns are indexed by `esn_W_res_col`, and row pointers are tracked by `esn_W_res_row_ptr`.
-* This reduces calculations from $2,500$ multiplications down to only $375$, providing a **$6.7\times$ speedup** in execution speed and saving ~10 KB of Flash space.
+Standard dense matrix-vector multiplication (SpMV) for a $50 \times 50$ reservoir requires $2,500$ floating-point multiplies per tick. By forcing $85\%$ sparsity during training, we compress $\mathbf{W}_{\text{res}}$ into three flat 1D arrays:
+- `esn_W_res_val` ($375$ elements): Non-zero floating-point weights.
+- `esn_W_res_col` ($375$ elements): 16-bit column indices of non-zero entries.
+- `esn_W_res_row_ptr` ($51$ elements): Indices marking the start of each row.
 
-### 2. Dual Q15 Fixed-Point Mode
-For low-power microcontrollers lacking a floating-point unit (FPU), the firmware supports a fixed-point path. Toggling `#define ESN_FIXED_POINT 1` in `main.c` compiles the ESN update to run entirely in fixed-point math:
-* Inputs are scaled to Q12 format ($\pm 8.0$ dynamic range).
-* Weights and reservoir states are tracked in Q15 format ($[-1.0, 1.0)$).
-* Tanh activation is approximated via a high-speed Q15 activation mapping.
-* Only the final readout prediction (3 channels) is cast back to float to maintain high classification boundary accuracy.
+This reduces reservoir operations to only $375$ multiplications (a **6.7× execution speedup**) and saves ~10 KB of Flash storage.
+
+### 2. Low-Power Fixed-Point Math (`ESN_FIXED_POINT 1`)
+For ultra-low-power microcontrollers lacking a Hardware Floating-Point Unit (FPU), the firmware provides a pure integer execution path. Toggling `#define ESN_FIXED_POINT 1` compiles the algorithm into integer-only arithmetic:
+- **Q12 Format Inputs**: Scaled features are represented in Q12 format ($\pm 8.0$ dynamic range, scaled by $4096$).
+- **Q15 Format States & Weights**: All states $x_t$ and matrices $\mathbf{W}_{\text{in}}$, $\mathbf{W}_{\text{res}}$ are converted to Q15 format ($[-1.0, 1.0)$, scaled by $32768$).
+- **Look-Up Table (LUT) Tanh Approximation**: Tanh calculations are avoided using a high-speed 33-point lookup table (`tanh_lut`) combined with linear interpolation:
+  $$\text{frac} = |x| \pmod{1024}$$
+  $$y = \frac{(1024 - \text{frac}) \cdot \text{LUT}[\text{index}] + \text{frac} \cdot \text{LUT}[\text{index} + 1]}{1024}$$
+- **Readout mapping**: Only the final evaluation boundary (the dense readout $\mathbf{W}_{\text{out}}$) is cast back to floats to maintain classification accuracy.
 
 ---
 
-## 🚀 Quick Start Guide
+## 🚀 Execution & Setup Guide
 
-### Step 1: Retrain the Classifier
-To train the classifier on the raw EV dataset and regenerate the weights header:
-```bash
-python train_classifier.py
-```
-This writes the sparse/dense weights directly to `esn_classifier_weights.h`.
+### 1. Train ESN Models
+Run the training pipelines to generate the weights header files:
 
-### Step 2: Build & Flash STM32
-1. Open the project inside your STM32 compiler toolchain (e.g. STM32CubeIDE).
-2. Ensure `esn_classifier_weights.h` is present in your compiler's include search paths.
-3. Configure the execution mode in `main.c` line 50:
-   * `#define ESN_FIXED_POINT 0` for high-precision standard float math.
-   * `#define ESN_FIXED_POINT 1` for integer-optimized low-power fixed-point math.
-4. Compile the project and flash the binary to your STM32 development board.
+- **Train ESN Classifier**:
+  ```bash
+  python hardware/train_classifier.py
+  ```
+  Generates `hardware/esn_classifier_weights.h` (uses 3 features $\rightarrow$ 50 reservoir nodes $\rightarrow$ CSR representation).
 
-### Step 3: Monitor Telemetry
-Open a serial terminal (e.g. PuTTY or screen) connected to the ST-Link Virtual COM Port:
-* **Baud Rate**: `115200`
-* **Settings**: 8 Data Bits, 1 Stop Bit, No Parity
-The console outputs live telemetry along with true states vs predicted states and classification accuracy:
+- **Train SOC/SOH Estimators**:
+  ```bash
+  python hardware/train_estimator.py
+  ```
+  Generates `hardware/esn_estimator_weights.h` (uses 4 features $\rightarrow$ 300 & 200 reservoir nodes $\rightarrow$ dense matrices).
+
+### 2. Configure & Build Firmware
+1. Open the project in your microcontroller toolchain (e.g., STM32CubeIDE, Keil MDK).
+2. Copy `esn_classifier_weights.h` into your compiler's directory headers (include search paths).
+3. Open `hardware/main.c` and configure your target math path at line 51:
+   - `#define ESN_FIXED_POINT 0` for high-precision standard float math.
+   - `#define ESN_FIXED_POINT 1` for integer-optimized low-power fixed-point math.
+4. Compile the project and flash the binary onto your board.
+
+### 3. Monitor Real-Time Classification
+Connect your STM32 development board (e.g., Nucleo) to your PC and open a serial terminal (PuTTY, Tera Term, or `screen`):
+- **Port**: ST-Link Virtual COM Port
+- **Baud Rate**: `115200`
+- **Settings**: 8 Data Bits, 1 Stop Bit, No Parity
+
+The terminal outputs real-time classifications alongside telemetry variables:
 ```text
+System Started
+
 --- Starting ESN Inference Loop (N=500) ---
 [  0] True=NORMAL   Pred=NORMAL   | V=11 I=2 T=32
 [  1] True=NORMAL   Pred=NORMAL   | V=11 I=2 T=32
 ...
-[170] True=WARNING  Pred=WARNING  | V=10 I=5 T=35
+[342] True=WARNING  Pred=WARNING  | V=10 I=5 T=35
 ...
-[285] True=CRITICAL Pred=CRITICAL | V=10 I=6 T=45
+[457] True=CRITICAL Pred=CRITICAL | V=10 I=6 T=45
 --- Loop Complete. Accuracy: 98.40% ---
 ```
+
+### 4. Hardware Visual Feedback
+The firmware controls the on-board GPIO pin `PA5` (the green LED on standard Nucleo boards) as visual feedback:
+- 🟢 **NORMAL**: `PA5` is kept Off (Low).
+- 🟡 **WARNING**: `PA5` blinks dynamically (Toggles at 20Hz).
+- 🔴 **CRITICAL**: `PA5` is kept On (High).

@@ -24,28 +24,34 @@ except ImportError:
     from simulator.battery_chemistry import get_chemistry
 
 try:
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    _paths_to_try = [
+        os.path.join(os.path.dirname(_this_dir), 'visualiser', 'training'),
+        os.path.join(os.path.dirname(os.path.dirname(_this_dir)), 'visualiser', 'training'),
+        os.path.join(os.path.dirname(_this_dir), 'training')
+    ]
+    for _p in _paths_to_try:
+        if os.path.exists(_p) and _p not in sys.path:
+            sys.path.insert(0, _p)
     from feature_engineering import extract_features_step
 except ImportError:
-    try:
-        from training.feature_engineering import extract_features_step
-    except ImportError:
-        # Fallback feature engineering logic
-        def extract_features_step(V_current, I_current, T_current, history, rolling_window=5):
-            lookback = rolling_window - 1
-            if len(history) == 0:
-                V_prev = V_current
-                V_history = [V_current]
-                I_history = [I_current]
-                T_history = [T_current]
-            else:
-                V_prev = history[-1]['voltage']
-                V_history = [r['voltage'] for r in history[-lookback:]] + [V_current]
-                I_history = [r['current'] for r in history[-lookback:]] + [I_current]
-                T_history = [r['temperature'] for r in history[-lookback:]] + [T_current]
-            V_grad = V_current - V_prev
-            I_ma = np.mean(I_history)
-            T_ma = np.mean(T_history)
-            return np.array([V_current, I_current, T_current, V_grad, I_ma, T_ma])
+    # Fallback feature engineering logic
+    def extract_features_step(V_current, I_current, T_current, history, rolling_window=5):
+        lookback = rolling_window - 1
+        if len(history) == 0:
+            V_prev = V_current
+            V_history = [V_current]
+            I_history = [I_current]
+            T_history = [T_current]
+        else:
+            V_prev = history[-1]['voltage']
+            V_history = [r['voltage'] for r in history[-lookback:]] + [V_current]
+            I_history = [r['current'] for r in history[-lookback:]] + [I_current]
+            T_history = [r['temperature'] for r in history[-lookback:]] + [T_current]
+        V_grad = V_current - V_prev
+        I_ma = np.mean(I_history)
+        T_ma = np.mean(T_history)
+        return np.array([V_current, I_current, T_current, V_grad, I_ma, T_ma])
 
 class EstimatorPipeline:
     def __init__(self, chemistry_name="li_ion", mismatch=1.0, esn_soc=None, esn_soh=None, input_means=None, input_stds=None):

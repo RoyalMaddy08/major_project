@@ -1,6 +1,6 @@
-# Battery Estimator Comparison Dashboard (True Physics vs. EKF+CC vs. ML-ESN)
+# Battery Estimator Evaluation Dashboard (True Physics vs. EKF+CC vs. ML-ESN)
 
-An end-to-end Python Machine Learning and Flask-based Battery State Estimator comparison and evaluation platform. This project simulates complex lithium-ion battery cell chemistry dynamics, logs real-time telemetry, and compares **Traditional Battery State Estimators (Extended Kalman Filter + Coulomb Counting)** side-by-side against **Modern Data-Driven Machine Learning (Reservoir Computing - Echo State Network)** models relative to the **True physical ground truth** of the cell simulator in real-time.
+An end-to-end Python, Machine Learning, and Flask-based Battery State Estimator comparison and evaluation platform. This project simulates complex lithium-ion battery cell chemistry dynamics, logs real-time telemetry, and compares **Traditional Battery State Estimators (Extended Kalman Filter + Coulomb Counting)** side-by-side against **Modern Data-Driven Machine Learning (Reservoir Computing - Echo State Network)** models relative to the **True physical ground truth** of the cell simulator in real-time.
 
 ---
 
@@ -40,33 +40,19 @@ This dashboard provides an evaluation sandbox to compare EKF and ESN estimators 
 
 The visualizer's code and assets are organized as follows:
 
-```
-visualiser/
-├── app.py (Main web server Flask application)
-├── config.py (Application configurations, ESN hyperparameters, and database settings)
-├── vercel.json (Vercel deployment routing and configuration)
-├── requirements.txt (Python dependency list)
-├── model_rc.pkl (Pre-trained ESN model weights)
-├── datasets/
-│   ├── training_ev_battery_dataset_multiclass.csv (Scaled EV drive cycles dataset)
-│   └── original_ev_battery_dataset_multiclass.csv (Original multiclass dataset)
-├── training/
-│   ├── train_rc.py (Offline ESN training script)
-│   └── feature_engineering.py (Shared feature engineering logic)
-├── simulator/
-│   ├── battery_chemistry.py (OCV tables for NMC, LFP, Lead-Acid, and Li-ion)
-│   ├── battery_simulator.py (Physics-based 2RC Equivalent Circuit Model)
-│   ├── traditional_estimator.py (2RC EKF and temperature-compensated SOH tracker)
-│   ├── estimator_pipeline.py (Unified estimation runner with safety overrides and state sync)
-│   └── config.py (Simulator private configuration)
-├── static/
-│   ├── css/
-│   │   └── style.css (Custom glassmorphic stylesheets)
-│   └── js/
-│       └── dashboard.js (Front-end visualization and polling controller)
-└── templates/
-    └── index.html (Main dashboard interface layout)
-```
+| File / Directory | Description |
+| :--- | :--- |
+| **[app.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/app.py)** | Main web server Flask application. Exposes endpoints for controls and telemetry, handles local catch-up simulation cycles, and manages background retraining threads. |
+| **[config.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/config.py)** | Application configurations, ESN hyperparameters, noise thresholds, fault injection rules, and database connection settings. |
+| **[vercel.json](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/vercel.json)** | Vercel deployment configurations, lambda size tuning, and file inclusions for serverless deployments. |
+| **[requirements.txt](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/requirements.txt)** | Python package dependencies for serverless executions, dashboard observers, and neural network calculations. |
+| **[model_rc.pkl](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/model_rc.pkl)** | Pickled pre-trained ESN model package (contains weights for SOC & SOH estimators, alongside feature normalization factors). |
+| **[datasets/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/datasets/)** | Time-series datasets (Voltage, Current, Temp, SOC, SOH) used to train the Reservoir ML estimators. |
+| **[training/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/)** | Offline ESN model training scripts and online/offline feature engineering extraction routines. |
+| **[simulator/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/)** | Subsystem representing equivalent circuit physics modeling, EKF observers, SOH observers, and unified estimation pipelines. |
+| **[static/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/static/)** | Client-side dashboard assets (glassmorphic styling, animation assets, JavaScript visual controllers). |
+| **[templates/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/templates/)** | HTML structure for the Flask comparative evaluation interface. |
+| **[tests/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/tests/)** | Extensive Unit Test suites validating chemistry tables, equivalent circuit step physics, EKF diagonal stability, and ESN quantization mappings. |
 
 ---
 
@@ -75,25 +61,25 @@ visualiser/
 The platform utilizes a hybrid architecture: a Python simulation engine, a document database (or memory array), and a real-time glassmorphic visualization interface.
 
 ```
-                  ┌──────────────────────────────┐
-                  │   Browser: dashboard.js      │
-                  └──────┬────────────────▲──────┘
-             POST /api/control            │ GET /api/telemetry
-                         │                │
-                         ▼                │
-                  ┌───────────────────────┴──────┐
-                  │    Visualiser Backend:       │
-                  │          app.py              │
-                  └──────┬────────────────▲──────┘
-             Read/Write  │                │ Hydrate classes
-             Sim State   ▼                │ & prime reservoir
-                  ┌───────────────────────┴──────┐
-                  │   Data Store: MongoDB / RAM  │
-                  └──────────────────────────────┘
-                         │
-                         ├─► Battery Physics Simulator (simulator/battery_simulator.py)
-                         ├─► 2RC EKF & SOH Estimators (simulator/traditional_estimator.py)
-                         └─► Echo State Network ML (training/train_rc.py)
+                   ┌──────────────────────────────┐
+                   │   Browser: dashboard.js      │
+                   └──────┬────────────────▲──────┘
+              POST /api/control            │ GET /api/telemetry
+                          │                │
+                          ▼                │
+                   ┌───────────────────────┴──────┐
+                   │    Visualiser Backend:       │
+                   │          app.py              │
+                   └──────┬────────────────▲──────┘
+              Read/Write  │                │ Hydrate classes
+              Sim State   ▼                │ & prime reservoir
+                   ┌───────────────────────┴──────┐
+                   │   Data Store: MongoDB / RAM  │
+                   └──────────────────────────────┘
+                          │
+                          ├─► Battery Physics Simulator (simulator/battery_simulator.py)
+                          ├─► 2RC EKF & SOH Estimators (simulator/traditional_estimator.py)
+                          └─► Echo State Network ML (training/train_rc.py)
 ```
 
 1. **Control Actions**: The user issues playback controls (start, pause, reset, drive cycle, chemistry, aging).
@@ -106,7 +92,7 @@ The platform utilizes a hybrid architecture: a Python simulation engine, a docum
 
 ## 🔋 Deep Dive: Battery Physics Simulator
 
-Located in [simulator/battery_simulator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/battery_simulator.py). It models a **3S (3 Cells in Series)** pack (or 6S for Lead-Acid) using a **first-order Equivalent Circuit Model (ECM)** with two polarization RC branches.
+Located in **[battery_simulator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/battery_simulator.py)**. It models a **3S (3 Cells in Series)** pack (or 6S for Lead-Acid) using a **first-order Equivalent Circuit Model (ECM)** with two polarization RC branches.
 
 ### 1. Electrical Model Dynamics
 The terminal voltage is calculated using:
@@ -137,7 +123,7 @@ The internal ohmic resistance increases as capacity fades:
 $$R_0(t) = R_{0,\text{nom}} \cdot \left[1.0 + 1.5 \cdot (1.0 - SOH)\right]$$
 
 ### 4. Chemistry Models
-Configurations are stored in [simulator/battery_chemistry.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/battery_chemistry.py):
+Configurations are stored in **[battery_chemistry.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/battery_chemistry.py)**:
 - **NMC (Lithium Nickel Manganese Cobalt Oxide)**: Nominal 11.1V (3S), 2.5 Ah capacity. Standard curve.
 - **LFP (Lithium Iron Phosphate)**: Nominal 9.6V (3S), 3.0 Ah capacity. Extremely flat OCV curve between 20% and 80% SOC.
 - **Lead-Acid**: Nominal 12.0V (6S), 7.0 Ah capacity. High internal resistance, heavy thermal mass.
@@ -146,7 +132,7 @@ Configurations are stored in [simulator/battery_chemistry.py](file:///d:/_Deploy
 
 ## 🎛️ Deep Dive: Traditional Estimators (EKF & SOH)
 
-Located in [simulator/traditional_estimator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/traditional_estimator.py).
+Located in **[traditional_estimator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/traditional_estimator.py)**.
 
 ### 1. Extended Kalman Filter (SOC, $V_1$, $V_2$ Estimation)
 The EKF treats the battery as a stochastic linear state-space system around the current state. The state vector is:
@@ -195,7 +181,7 @@ The SOH tracking module estimates resistance growth from step voltage changes an
 
 ## 🧠 Deep Dive: Echo State Networks (Reservoir ML)
 
-Located in [training/train_rc.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/train_rc.py). ESNs utilize high-dimensional temporal representations.
+Located in **[train_rc.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/train_rc.py)**. ESNs utilize high-dimensional temporal representations.
 
 ### 1. Reservoir Initialization
 - **Input Weights ($\mathbf{W}_{\text{in}}$)**: Randomly generated within range $[-input\_scaling, input\_scaling]$. Dimension: $N_{\text{reservoir}} \times (1 + N_{\text{inputs}})$.
@@ -239,7 +225,7 @@ The ESN models are trained using training files in `datasets/`:
 - `SOC / SOH`: Ground truth indices.
 
 ### 2. Feature Extraction
-Features are extracted offline in [training/feature_engineering.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/feature_engineering.py) and replicated online at runtime:
+Features are extracted offline in **[feature_engineering.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/feature_engineering.py)** and replicated online at runtime:
 1. **Voltage**: Terminal voltage $V$.
 2. **Current**: Load current $I$.
 3. **Temperature**: Cell temperature $T$ (excluded from selected ESN inputs to prevent out-of-distribution thermal bias).
@@ -334,7 +320,7 @@ Returns the historical records of the simulation run.
 
 ## ⚙️ Configuration & Tuning Parameters
 
-All settings are configured inside [config.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/config.py) and can be overriden via environment variables:
+All settings are configured inside **[config.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/config.py)** and can be overriden via environment variables:
 
 | Setting | Default Value | Description |
 | :--- | :--- | :--- |
@@ -375,23 +361,29 @@ The platform is designed to be highly flexible:
 
 ### Step 1: Install Dependencies
 ```bash
-pip install -r requirements.txt
+pip install -r software/visualiser/requirements.txt
 ```
 
 ### Step 2: Set Up Database (Optional)
 Start a local MongoDB instance at `mongodb://localhost:27017/`. If MongoDB is disconnected, the visualiser will silently fall back to local memory data storage.
 
-### Step 3: Train ESN Models (Optional)
+### Step 3: Run Unit Tests (Recommended Verification)
+To verify calculations, observers, and ESN quantization operations:
+```bash
+python -m unittest software/visualiser/tests/test_estimators.py
+```
+
+### Step 4: Train ESN Models (Optional)
 If `model_rc.pkl` is missing or needs retraining:
 ```bash
-python training/train_rc.py
+python software/visualiser/training/train_rc.py
 ```
 This trains the SOC and SOH ESNs on the `datasets/training_ev_battery_dataset_multiclass.csv` EV data and registers weights locally and to MongoDB.
 
-### Step 4: Launch Web Visualizer
+### Step 5: Launch Web Visualizer
 Start the Flask web visualizer:
 ```bash
-python app.py
+python software/visualiser/app.py
 ```
 *Navigate to `http://localhost:5000/` to open the comparison dashboard.*
 
@@ -406,3 +398,4 @@ To run 100% serverlessly:
 - **Catch-up Ticks**: The simulator runs exactly the number of ticks that *should* have occurred during that elapsed time.
 - **Lag Caps**: To prevent "catch-up lag storms" on cold start, if the server has been inactive for a long time, the catch-up loop limits the maximum number of ticks to run.
 - **Stateless Persistence**: Hydrates simulator and estimator classes directly from MongoDB/memory payloads during each request, making the system 100% stateless.
+- **Weights Registry**: ESN model package is serialized and cached dynamically inside a MongoDB model registry (`model_weights` collection), avoiding local file write blocks on serverless read-only partitions.

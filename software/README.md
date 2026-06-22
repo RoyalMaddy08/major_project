@@ -32,21 +32,25 @@ If the simulator server is offline, the Visualizer acts serverlessly. It loads h
 
 ## 📂 System File Hierarchy
 
-The repository is organized into distinct functional directories:
+The `software` directory contains the following components:
 
-- **[visualiser/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/)**: Interactive dashboard and estimator runner.
-  - [app.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/app.py): Flask visualizer backend.
-  - [config.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/config.py): Visualizer configs and ESN hyperparameters.
-  - [training/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/): ESN machine learning model trainer.
-    - [train_rc.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/train_rc.py): Ridge regression ESN training.
-    - [feature_engineering.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/feature_engineering.py): Shared online/offline feature extractor.
-- **[simulator/](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/)**: Standalone battery cell physics generator.
-  - [app.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/app.py): Flask simulator server.
-  - [battery_simulator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/battery_simulator.py): 2RC electro-thermal physics.
-  - [battery_chemistry.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/battery_chemistry.py): NMC, LFP, and Lead-Acid OCV profiles.
-- **Shared Core Code** (replicated in both subdirectories to maintain modular independence):
-  - [traditional_estimator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/traditional_estimator.py): 2RC EKF observer and temperature-compensated SOH tracker.
+- **[README.md](file:///d:/_Deployed_Projects_Vercel/major_project/software/README.md)**: Main architecture overview and running instructions.
+- **[simulator/](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/)**: Standalone battery cell physics simulation server (Port 8000).
+  - [app.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/app.py): Flask simulator server with background thread loop.
+  - [config.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/config.py): Private database, server, noise, and fault configurations.
+  - [battery_simulator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/battery_simulator.py): 2RC ECM electro-thermal physics and drive cycle profiles.
+  - [battery_chemistry.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/battery_chemistry.py): NMC, LFP, and Lead-Acid OCV lookup tables.
+  - [traditional_estimator.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/traditional_estimator.py): Physics-based EKF and SOH tracker.
   - [estimator_pipeline.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/simulator/estimator_pipeline.py): Orchestrates EKF, CC, and ESN estimators with diagnostics.
+- **[visualiser/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/)**: Flask interactive comparative dashboard (Port 5000).
+  - [app.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/app.py): Flask visualizer backend with local simulation fallback.
+  - [config.py](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/config.py): Visualizer configs, ESN hyperparameters, and noise thresholds.
+  - [vercel.json](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/vercel.json): Vercel Serverless deployment and file inclusion rules.
+  - [model_rc.pkl](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/model_rc.pkl): Pre-trained Echo State Network weights.
+  - [datasets/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/datasets/): Time-series datasets used for ESN model training.
+  - [training/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/training/): ESN training scripts and feature extraction functions.
+  - [simulator/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/simulator/): Replicated core physics and estimators for standalone serverless mode.
+  - [tests/](file:///d:/_Deployed_Projects_Vercel/major_project/software/visualiser/tests/): Unit tests for physics engine, observers, and ESN predictions.
 
 ---
 
